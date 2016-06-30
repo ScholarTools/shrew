@@ -44,10 +44,8 @@ class Window(QWidget):
     """
     def __init__(self):
         super().__init__()
-        #loading = LoadingPopUp()
         self.library = self._instantiate_library()
         self.api = API()
-        #loading.close_window()
 
         # Connect copy to clipboard shortcut
         self.copy_shortcut = QShortcut(QKeySequence("Ctrl+C"), self)
@@ -55,6 +53,7 @@ class Window(QWidget):
 
         self.initUI()
         self.data = Data()
+        self.response_message_dict = self._create_message_dict()
 
     def initUI(self):
 
@@ -83,20 +82,20 @@ class Window(QWidget):
         self.refresh.clicked.connect(self.resync)
 
         # Format indicator button
-        self.indicator.setStyleSheet("background-color: rgba(0,0,0,0.25);")
+        self.indicator.setStyleSheet("""QPushButton {
+                                        background-color: rgba(0,0,0,0.25);
+                                        }""")
         self.indicator.setAutoFillBackground(True)
         self.indicator.setFixedSize(20,20)
-        self.indicator.setToolTip("Green if DOI found in library")
+        self.indicator.setToolTip("Green: doc DOI in library.\n"
+                                  "Yellow: doc missing file.\n"
+                                  "Red: no doc with DOI found.")
 
         # Set bool to keep track of if a DOI is in the library
-        self.is_in_lib = False
-
-        # TODO: Make this ToolTip color work
-        self.setStyleSheet("""QToolTip {
-                                    background-color: white;
-                                    color: black;
-                                    border: black solid 1px;
-                                    }""")
+        # 0 --> DOI is not found in library (indicator red)
+        # 1 --> DOI is found, but there is no file (indicator orange)
+        # 2 --> DOI is found, with file attached (indicator green)
+        self.is_in_lib = 0
 
         # Make scroll items widget
         self.ref_items = QWidget()
@@ -168,16 +167,25 @@ class Window(QWidget):
         in_library = self._check_lib()
         if in_library:
             self.data.doc_response_json = self.library.get_document(self._get_doi(), return_json=True)
-            print(self.data.doc_response_json.keys())
-            self.indicator.setStyleSheet("background-color: rgba(0, 255, 0, 0.25);")
-            self.is_in_lib = True
-
+            if self.data.doc_response_json['file_attached'] == True:
+                self.indicator.setStyleSheet("""QPushButton {
+                                                background-color: rgba(0,255,0,0.25);
+                                                }""")
+                self.is_in_lib = 2
+            else:
+                self.indicator.setStyleSheet("""QPushButton {
+                                                background-color: rgba(255,165,0,0.25);
+                                                }""")
+                self.is_in_lib = 1
         else:
             self.data.doc_response_json = None
-            self.indicator.setStyleSheet("background-color: rgba(255, 0, 0, 0.25);")
-            self.is_in_lib = False
+            self.indicator.setStyleSheet("""QPushButton {
+                                            background-color: rgba(255, 0, 0, 0.25);
+                                            }""")
+            self.is_in_lib = 0
 
     def resync(self):
+        self._set_response_message('resync')
         self.library.sync()
         if self.ref_items_layout.count() > 1:
             for x in range(1, self.ref_items_layout.count()):
@@ -190,7 +198,7 @@ class Window(QWidget):
                     else:
                         label.setStyleSheet("background-color: rgba(255,0,0,0.25);")
         self.update_indicator()
-
+        self.stacked_responses.hide()
 
     def get_refs(self):
         """
@@ -204,13 +212,14 @@ class Window(QWidget):
         self._populate_response_widget()
 
         if entered_doi == '':
-            self.stacked_responses.setCurrentIndex(0)
-            self.stacked_responses.show()
+            self._set_response_message('enter text')
             return
 
         # Resolve DOI and get references
+        refs = []
         try:
-            paper_info = rr.resolve_doi(entered_doi)
+            self._set_response_message('scopus query')
+            paper_info = rr.retrieve_all_info(input=entered_doi, input_type='doi')
             refs = paper_info.references
             self._populate_data(paper_info)
         except UnsupportedPublisherError as exc:
@@ -221,9 +230,9 @@ class Window(QWidget):
             log(method='gui.Window.get_refs', message='Error parsing journal page', error=str(exc), doi=entered_doi)
             QMessageBox.warning(self, 'Warning', 'Error parsing journal page')
             return
-        except Exception as exc:
-            log(method='gui.Window.get_refs', error=str(exc), doi=entered_doi)
-            QMessageBox.warning(self, 'Warning', str(exc))
+        #except Exception as exc:
+        #    log(method='gui.Window.get_refs', error=str(exc), doi=entered_doi)
+        #    QMessageBox.warning(self, 'Warning', str(exc))
 
         # First clean up existing GUI window.
         # If there are widgets in the layout (i.e. from the last call to 'get_refs'),
@@ -234,6 +243,7 @@ class Window(QWidget):
             ref_label = self.ref_to_label(ref)
             self.ref_items_layout.insertWidget(self.ref_area_layout.count() - 1, ref_label)
 
+        self.stacked_responses.hide()
         self.ref_area.show()
 
     #
@@ -245,7 +255,10 @@ class Window(QWidget):
         Adds paper corresponding to the DOI in the text field to the user library,
         if it is not already there.
         """
-        if self.is_in_lib:
+        if self.is_in_lib == 2:
+            QMessageBox.information(self, 'Information', 'Paper is already in library.')
+            return
+        elif self.is_in_lib == 1:
             QMessageBox.information(self, 'Information', 'Paper is already in library.')
             return
 
@@ -258,16 +271,16 @@ class Window(QWidget):
             QMessageBox.warning(self, 'Warning', 'Publisher is not yet supported.\n'
                                                  'Document not added.')
             return
-        except CallFailedException as call:
-            log(method='gui.Window.add_to_library_from_main', message='Call failed', error=str(call), doi=doi)
-            QMessageBox.warning(self, 'Warning', str(call))
+        #except CallFailedException as call:
+        #    log(method='gui.Window.add_to_library_from_main', message='Call failed', error=str(call), doi=doi)
+        #    QMessageBox.warning(self, 'Warning', str(call))
         except ParseException or AttributeError as exc:
             log(method='gui.Window.add_to_library_from_main', message='Error while parsing article webpage',
                 error=str(exc), doi=doi)
             QMessageBox.warning(self, 'Warning', 'Error while parsing article webpage.')
-        except Exception as exc:
-            log(method='gui.Window.add_to_library_from_main', error=str(exc), doi=doi)
-            QMessageBox.warning(self, 'Warning', str(exc))
+        #except Exception as exc:
+        #    log(method='gui.Window.add_to_library_from_main', error=str(exc), doi=doi)
+        #    QMessageBox.warning(self, 'Warning', str(exc))
         self._update_document_status(doi, adding=True)
         self.update_indicator()
 
@@ -337,11 +350,11 @@ class Window(QWidget):
         ref_small_text = ''
         ref_expanded_text = ''
         if ref_id is not None:
-            ref_small_text = ref_small_text + str(ref_id)
-            ref_expanded_text = ref_expanded_text + str(ref_id)
+            ref_small_text = ref_small_text + str(ref_id) + '. '
+            ref_expanded_text = ref_expanded_text + str(ref_id) + '. '
         if ref_author_list is not None:
-            ref_small_text = ref_small_text + '. ' + ref_first_authors
-            ref_expanded_text = ref_expanded_text + '. ' + ref_full_authors
+            ref_small_text = ref_small_text + ref_first_authors
+            ref_expanded_text = ref_expanded_text + ref_full_authors
         if ref.get('publication') is not None:
             ref_expanded_text = ref_expanded_text + '\n' + ref.get('publication')
         if ref_year is not None:
@@ -493,8 +506,12 @@ class Window(QWidget):
         """
         if doi is None:
             if label is None:
-                raise LookupError('Must provide either a DOI or label to move_doc_to_trash.')
+                QMessageBox.warning(self, 'Warning', 'Must provide a DOI to move document to trash.')
+                return
             doi = label.doi
+            if doi is None:
+                QMessageBox.warning(self, 'Warning', 'Must provide either a DOI or label to move doc to trash')
+                return
         doc_json = self.library.get_document(doi, return_json=True)
         if doc_json is None:
             QMessageBox.information(self, 'Information', 'Document is not in your library.')
@@ -513,7 +530,7 @@ class Window(QWidget):
         the main text box.
         """
         # Paper must be in the library to display the window
-        if not self.is_in_lib:
+        if self.is_in_lib == 0:
             QMessageBox.information(self, 'Information', 'Document not found in library.')
             return
         doc_json = self.data.doc_response_json
@@ -529,6 +546,10 @@ class Window(QWidget):
         from the references window.
         """
         label = self.sender().parent
+        if label.doi is None:
+            QMessageBox.warning(self, 'Warning', 'No DOI found for this paper.')
+            return
+
         try:
             doc_response_json = self.library.get_document(label.doi, return_json=True)
         except DOINotFoundError:
@@ -602,9 +623,31 @@ class Window(QWidget):
         """
         if self.stacked_responses.count() < 3:
             self.stacked_responses.addWidget(QLabel('Please enter text above.'))
-            self.stacked_responses.addWidget(QLabel('Found in library!'))
-            self.stacked_responses.addWidget(QLabel('Not found in library.'))
+            self.stacked_responses.addWidget(QLabel('Querying Scopus...'))
+            self.stacked_responses.addWidget(QLabel('Re-syncing with Mendeley...'))
             self.stacked_responses.hide()
+
+    def _set_response_message(self, message):
+        """
+        Sets the line of text to indicate program status.
+        """
+        widget_index = self.response_message_dict.get(message)
+        if widget_index is None:
+            return
+
+        self.stacked_responses.setCurrentIndex(widget_index)
+        self.stacked_responses.show()
+
+    def _create_message_dict(self):
+        """
+        Maps intuitive status messages to their stacked_responses index
+        """
+        md = dict()
+        md['enter text'] = 0
+        md['scopus query'] = 1
+        md['resync'] = 2
+
+        return md
 
     def _populate_data(self, info):
         """
@@ -621,7 +664,6 @@ class Window(QWidget):
         self.data.references = info.references
         self.data.doi = info.doi
         self.data.scraper_obj = info.scraper_obj
-        self.data.idnum = info.idnum
         self.data.pdf_link = info.pdf_link
         self.data.url = info.url
         self.data.small_ref_labels = []
@@ -886,8 +928,6 @@ class TabbedNotesWindow(QTabWidget):
         self.saved = True
 
         self.show()
-
-        #self.initUI()
 
     def notesUI(self):
         # Make widgets
