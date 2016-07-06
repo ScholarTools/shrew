@@ -91,3 +91,4 @@ ENV/
 # Local files
 error_logging.py
 logfile.txt
+*.db
