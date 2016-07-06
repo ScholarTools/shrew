@@ -92,3 +92,4 @@ ENV/
 error_logging.py
 logfile.txt
 *.db
+*.html
