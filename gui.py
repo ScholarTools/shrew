@@ -10,6 +10,7 @@ from PyQt5.QtGui import *
 from mendeley import client_library
 from mendeley.api import API
 import reference_resolver as rr
+import database as db
 from pypub.utils import get_truncated_display_string as td
 from error_logging import log
 
@@ -71,6 +72,7 @@ class Window(QWidget):
         self.stacked_responses = QStackedWidget()
         self.ref_area = QScrollArea()
         self.get_all_refs = QPushButton('Add All References')
+        self.resolve_dois = QPushButton('Resolve DOIs to References')
 
         # Set connections to functions
         self.textEntry.textChanged.connect(self.update_indicator)
@@ -79,6 +81,7 @@ class Window(QWidget):
         self.open_notes.clicked.connect(self.show_main_notes_box)
         self.add_to_lib.clicked.connect(self.add_to_library_from_main)
         self.get_all_refs.clicked.connect(self.add_all_refs)
+        self.resolve_dois.clicked.connect(self.get_all_dois)
         self.refresh.clicked.connect(self.resync)
 
         # Format indicator button
@@ -140,6 +143,7 @@ class Window(QWidget):
         self.vbox.addWidget(self.stacked_responses)
         self.vbox.addWidget(self.ref_area)
         self.vbox.addWidget(self.get_all_refs)
+        self.vbox.addWidget(self.resolve_dois)
         self.vbox.addStretch(1)
 
         # Set layout to be the vertical box.
@@ -302,6 +306,31 @@ class Window(QWidget):
             print(label.small_text)
             self.add_to_library_from_label(label, doi, index=x, referencing_paper=main_doi, popups=False)
 
+    def get_all_dois(self):
+        """
+        Attempts to retrieve DOIs corresponding to each reference.
+        """
+        # The ref_items_layout would hold the ref_labels.
+        # If count is 0, none are listed, and it needs to be populated.
+        if self.ref_items_layout.count() == 1:
+            self.get_refs()
+
+        for x in range(1, self.ref_items_layout.count()):
+            label = self.ref_items_layout.itemAt(x).widget()
+            if label.doi is not None:
+                continue
+            lookup = label.expanded_text
+            lookup = lookup.replace('\n', ' ')
+            doi = rr.doi_from_citation(lookup)
+            if doi is not None and '10.' in doi:
+                label.doi = doi
+                title = label.reference.get('title')
+                label.expanded_text = label.expanded_text + '\n' + doi
+                if title is not None:
+                    db.update_reference_field(identifying_value=title, updating_field='doi',
+                                            updating_value=doi, filter_by_title=True)
+                self._update_document_status(doi=doi, label=label, adding=True, popups=False)
+
 
     # ++++++++++++++++++++++++++++++++++++++++++++
     # ============================================ Reference Label Functions
@@ -331,6 +360,9 @@ class Window(QWidget):
         ref_year = ref.get('year')
         if ref_year is None:
             ref_year = ref.get('date')
+
+        info_dict = {'ref_id':ref_id, 'ref_title':ref_title, 'ref_author_list':ref_author_list,
+                     'ref_doi':ref_doi, 'ref_year':ref_year}
 
         # Format short and long author lists
         if ref_author_list is not None:
@@ -374,12 +406,16 @@ class Window(QWidget):
         # Cut off length of small text to fit within window
         ref_small_text = td(ref_small_text, 66)
 
+        info_dict['ref_first_authors'] = ref_first_authors
+        info_dict['ref_full_authors'] = ref_full_authors
+
         # Make ReferenceLabel object and set attributes
         ref_label = ReferenceLabel(ref_small_text, self)
         ref_label.small_text = ref_small_text
         ref_label.expanded_text = ref_expanded_text
         ref_label.reference = ref
         ref_label.doi = ref.get('doi')
+        ref_label.info_dict = info_dict
 
         # Connect click to expanding the label
         # Connect double click to opening notes/info window
@@ -561,7 +597,7 @@ class Window(QWidget):
             else:
                 return
         notes = doc_response_json.get('notes')
-        self.tnw = NotesWindow(parent=self, notes=notes, doc_json=doc_response_json)
+        self.tnw = TabbedNotesWindow(parent=self, notes=notes, doc_json=doc_response_json, label=label)
         self.tnw.show()
 
 
@@ -890,7 +926,7 @@ class TabbedNotesWindow(QTabWidget):
         like "edited with reference to [original file that references this one]"
 
     """
-    def __init__(self, parent=None, notes=None, doc_json=None):
+    def __init__(self, parent=None, notes=None, doc_json=None, label=None):
         super(TabbedNotesWindow, self).__init__()
         self.parent = parent
         self.notes = notes
@@ -898,11 +934,17 @@ class TabbedNotesWindow(QTabWidget):
         self.doi = None
         self.doc_id = None
         self.caption = None
+        self.label = label
 
+        if self.label is not None:
+            info_dict = getattr(label, 'info_dict', None)
+            if info_dict is not None:
+                self.doi = info_dict.get('ref_doi')
+                self.make_captions(ref_dict=info_dict)
         if self.doc_json is not None:
             self.doi = self.doc_json.get('doi')
             self.doc_id = self.doc_json.get('id')
-            self.make_captions(self.doc_json)
+            self.make_captions(doc_json=self.doc_json)
 
         self.setWindowTitle(self.caption)
 
@@ -1029,17 +1071,23 @@ class TabbedNotesWindow(QTabWidget):
 
         self.info_tab.setLayout(info_layout)
 
-    def make_captions(self, doc_json):
-        # Make a useful window title
-        doc_title = doc_json.get('title')
-        doc_year = doc_json.get('year')
-        doc_authors = doc_json.get('authors')
-        if doc_authors is not None:
-            lastnames = [a.get('last_name') for a in doc_authors]
-            first_authors = lastnames[0:2]
-            first_authors = ', '.join(first_authors)
-            if len(lastnames) > 2:
-                first_authors = first_authors + ', et al.'
+    def make_captions(self, doc_json=None, ref_dict=None):
+        if ref_dict is not None:
+            doc_title = ref_dict.get('ref_title')
+            doc_year = ref_dict.get('ref_year')
+            doc_authors = ref_dict.get('ref_author_list')
+            first_authors = ref_dict.get('ref_first_authors')
+        else:
+            # Make a useful window title
+            doc_title = doc_json.get('title')
+            doc_year = doc_json.get('year')
+            doc_authors = doc_json.get('authors')
+            if doc_authors is not None:
+                lastnames = [a.get('last_name') for a in doc_authors]
+                first_authors = lastnames[0:2]
+                first_authors = ', '.join(first_authors)
+                if len(lastnames) > 2:
+                    first_authors = first_authors + ', et al.'
 
         self.caption = ''
 
@@ -1136,6 +1184,7 @@ class ReferenceLabel(QLabel):
         self.small_text = None
         self.reference = None
         self.doi = None
+        self.info_dict = None
 
         self.ClickFilter = ClickFilter(self)
         self.installEventFilter(self.ClickFilter)
