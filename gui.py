@@ -9,13 +9,14 @@ from PyQt5.QtGui import *
 # Local
 from mendeley import client_library
 from mendeley.api import API
+from mendeley import db_interface as db
 import reference_resolver as rr
-import database as db
 from pypub.utils import get_truncated_display_string as td
 from error_logging import log
 
 from mendeley.errors import *
 from pypub_errors import *
+
 
 
 class Window(QWidget):
@@ -225,6 +226,19 @@ class Window(QWidget):
             self._set_response_message('scopus query')
             paper_info = rr.retrieve_all_info(input=entered_doi, input_type='doi')
             refs = paper_info.references
+
+            # If the paper is in the library and has no references, try
+            # retrieving references from online (not from saved database).
+            if len(refs) == 0 and self.is_in_lib in (1,2):
+                refs = rr.retrieve_references(doi=entered_doi)
+
+                # If references are found, add them to the saved database.
+                if len(refs) > 0:
+                    for ref in refs:
+                        title = getattr(paper_info.entry, 'title', None)
+                        db.add_reference(ref, main_doi=entered_doi, main_title=title)
+                paper_info.references = refs
+
             self._populate_data(paper_info)
         except UnsupportedPublisherError as exc:
             log(method='gui.Window.get_refs', message='Unsupported Publisher', error=str(exc), doi=entered_doi)
@@ -304,7 +318,17 @@ class Window(QWidget):
             label = self.ref_items_layout.itemAt(x).widget()
             doi = label.doi
             print(label.small_text)
-            self.add_to_library_from_label(label, doi, index=x, referencing_paper=main_doi, popups=False)
+            self.add_to_library_from_label(label, doi, index=x, referencing_paper=main_doi, popups=False,
+                update_status=False)
+
+        # Sync the library once (instead of for every reference)
+        self.library.sync()
+
+        # Update all of the labels
+        for x in range(1, self.ref_items_layout.count()):
+            label = self.ref_items_layout.itemAt(x).widget()
+            doi = label.doi
+            self._update_document_status(doi=doi, label=label, adding=True, popups=False, sync=False)
 
     def get_all_dois(self):
         """
@@ -327,6 +351,8 @@ class Window(QWidget):
                 title = label.reference.get('title')
                 label.expanded_text = label.expanded_text + '\n' + doi
                 if title is not None:
+                    # Update the reference entry within the database to
+                    # reflect the change.
                     db.update_reference_field(identifying_value=title, updating_field='doi',
                                             updating_value=doi, filter_by_title=True)
                 self._update_document_status(doi=doi, label=label, adding=True, popups=False)
@@ -452,7 +478,7 @@ class Window(QWidget):
     # ++++++++++++++++++++++++++++++++++++++++++++
     # ============================================ Reference Label Right-Click Functions
     # ++++++++++++++++++++++++++++++++++++++++++++
-    def add_to_library_from_label(self, label, doi, index=None, referencing_paper=None, popups=True):
+    def add_to_library_from_label(self, label, doi, index=None, referencing_paper=None, popups=True, update_status=True):
         """
         Adds reference paper to library from right-clicking on a label.
 
@@ -508,7 +534,9 @@ class Window(QWidget):
                 ref_index=index, main_lookup=referencing_paper)
             if popups:
                 QMessageBox.warning(self, 'Warning', str(exc))
-        self._update_document_status(doi, label=label, adding=True, popups=popups)
+
+        if update_status:
+            self._update_document_status(doi, label=label, adding=True, popups=popups)
 
     def lookup_ref(self, doi):
         """
@@ -705,7 +733,7 @@ class Window(QWidget):
         self.data.small_ref_labels = []
         self.data.expanded_ref_labels = []
 
-    def _update_document_status(self, doi, label=None, adding=False, popups=True):
+    def _update_document_status(self, doi, label=None, adding=False, popups=True, sync=True):
         """
         Updates the indicators about whether a certain paper is in the user's library.
         If from a reference label, change color of that label.
@@ -721,7 +749,9 @@ class Window(QWidget):
         adding : bool
             Indicates whether a paper is being added or deleted.
         """
-        self.library.sync()
+        if sync:
+            self.library.sync()
+
         exists = self.library.check_for_document(doi)
         if exists:
             doc_json = self.library.get_document(doi, return_json=True)
