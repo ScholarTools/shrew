@@ -53,6 +53,9 @@ class Window(QWidget):
         self.copy_shortcut = QShortcut(QKeySequence("Ctrl+C"), self)
         self.copy_shortcut.activated.connect(_copy_to_clipboard)
 
+        # Keeping track of searched DOIs
+
+
         self.initUI()
         self.data = Data()
         self.response_message_dict = self._create_message_dict()
@@ -71,6 +74,7 @@ class Window(QWidget):
         self.open_notes = QPushButton('Open Notes')
         self.add_to_lib = QPushButton('Add to Library')
         self.stacked_responses = QStackedWidget()
+        self.status_label = QLabel('')
         self.ref_area = QScrollArea()
         self.get_all_refs = QPushButton('Add All References')
         self.resolve_dois = QPushButton('Resolve DOIs to References')
@@ -142,10 +146,13 @@ class Window(QWidget):
         self.vbox.addLayout(textline)
         self.vbox.addLayout(checkboxes)
         self.vbox.addWidget(self.stacked_responses)
+        self.vbox.addWidget(self.status_label)
         self.vbox.addWidget(self.ref_area)
         self.vbox.addWidget(self.get_all_refs)
         self.vbox.addWidget(self.resolve_dois)
         self.vbox.addStretch(1)
+
+        self.status_label.hide()
 
         # Set layout to be the vertical box.
         self.setLayout(self.vbox)
@@ -155,7 +162,7 @@ class Window(QWidget):
         self.copy_shortcut.activated.connect(_copy_to_clipboard)
 
         # Sizing, centering, and showing
-        self.resize(500,600)
+        self.resize(500,700)
         _center(self)
         self.setWindowTitle('ScholarTools')
         self.show()
@@ -197,9 +204,16 @@ class Window(QWidget):
                 label = self.ref_items_layout.itemAt(x).widget()
                 doi = label.doi
                 if doi is not None:
-                    exists = self.library.check_for_document(doi)
+                    exists = self.library.check_for_document(doi=doi)
                     if exists:
-                        label.setStyleSheet("background-color: rgba(0,255,0,0.25);")
+                        doc_json = self.library.get_document(doi, return_json=True)
+                        has_file = doc_json.get('file_attached')
+                        if doc_json is not None:
+                            if has_file is not None:
+                                if has_file:
+                                    label.setStyleSheet("background-color: rgba(0,255,0,0.25);")
+                                else:
+                                    label.setStyleSheet("background-color: rgba(255,165,0,0.25);")
                     else:
                         label.setStyleSheet("background-color: rgba(255,0,0,0.25);")
         self.update_indicator()
@@ -248,9 +262,9 @@ class Window(QWidget):
             log(method='gui.Window.get_refs', message='Error parsing journal page', error=str(exc), doi=entered_doi)
             QMessageBox.warning(self, 'Warning', 'Error parsing journal page')
             return
-        #except Exception as exc:
-        #    log(method='gui.Window.get_refs', error=str(exc), doi=entered_doi)
-        #    QMessageBox.warning(self, 'Warning', str(exc))
+        except Exception as exc:
+            log(method='gui.Window.get_refs', error=str(exc), doi=entered_doi)
+            QMessageBox.warning(self, 'Warning', str(exc))
 
         # First clean up existing GUI window.
         # If there are widgets in the layout (i.e. from the last call to 'get_refs'),
@@ -289,16 +303,16 @@ class Window(QWidget):
             QMessageBox.warning(self, 'Warning', 'Publisher is not yet supported.\n'
                                                  'Document not added.')
             return
-        #except CallFailedException as call:
-        #    log(method='gui.Window.add_to_library_from_main', message='Call failed', error=str(call), doi=doi)
-        #    QMessageBox.warning(self, 'Warning', str(call))
+        except CallFailedException as call:
+            log(method='gui.Window.add_to_library_from_main', message='Call failed', error=str(call), doi=doi)
+            QMessageBox.warning(self, 'Warning', str(call))
         except ParseException or AttributeError as exc:
             log(method='gui.Window.add_to_library_from_main', message='Error while parsing article webpage',
                 error=str(exc), doi=doi)
             QMessageBox.warning(self, 'Warning', 'Error while parsing article webpage.')
-        #except Exception as exc:
-        #    log(method='gui.Window.add_to_library_from_main', error=str(exc), doi=doi)
-        #    QMessageBox.warning(self, 'Warning', str(exc))
+        except Exception as exc:
+            log(method='gui.Window.add_to_library_from_main', error=str(exc), doi=doi)
+            QMessageBox.warning(self, 'Warning', str(exc))
         self._update_document_status(doi, adding=True)
         self.update_indicator()
 
@@ -314,9 +328,15 @@ class Window(QWidget):
 
         main_doi = self._get_doi()
 
+        self.status_label.show()
+
         for x in range(1, self.ref_items_layout.count()):
             label = self.ref_items_layout.itemAt(x).widget()
             doi = label.doi
+            self.status_label.setText('Adding: ' + label.small_text)
+            self.status_label.repaint()
+            qApp.processEvents()
+
             print(label.small_text)
             self.add_to_library_from_label(label, doi, index=x, referencing_paper=main_doi, popups=False,
                 update_status=False)
@@ -330,6 +350,8 @@ class Window(QWidget):
             doi = label.doi
             self._update_document_status(doi=doi, label=label, adding=True, popups=False, sync=False)
 
+        self.status_label.hide()
+
     def get_all_dois(self):
         """
         Attempts to retrieve DOIs corresponding to each reference.
@@ -339,10 +361,17 @@ class Window(QWidget):
         if self.ref_items_layout.count() == 1:
             self.get_refs()
 
+        self.status_label.show()
+
         for x in range(1, self.ref_items_layout.count()):
             label = self.ref_items_layout.itemAt(x).widget()
             if label.doi is not None:
                 continue
+
+            self.status_label.setText('Finding DOI for: ' + label.small_text)
+            self.status_label.repaint()
+            qApp.processEvents()
+
             lookup = label.expanded_text
             lookup = lookup.replace('\n', ' ')
             doi = rr.doi_from_citation(lookup)
@@ -355,7 +384,10 @@ class Window(QWidget):
                     # reflect the change.
                     db.update_reference_field(identifying_value=title, updating_field='doi',
                                             updating_value=doi, filter_by_title=True)
-                self._update_document_status(doi=doi, label=label, adding=True, popups=False)
+                self._update_document_status(doi=doi, label=label, adding=True, popups=False, sync=False)
+
+        self.status_label.hide()
+        self.library.sync()
 
 
     # ++++++++++++++++++++++++++++++++++++++++++++
@@ -399,7 +431,7 @@ class Window(QWidget):
                 ref_first_authors = ref_full_authors
 
         # Initialize indicator about whether reference is in library
-        in_lib = 2
+        in_lib = 3
 
         # Build up strings with existing info
         # Small text is for abbreviated preview.
@@ -423,10 +455,14 @@ class Window(QWidget):
             ref_expanded_text = ref_expanded_text + '\n' + ref_title
         if ref_doi is not None:
             ref_expanded_text = ref_expanded_text + '\n' + ref_doi
-            in_library = self.library.check_for_document(ref_doi)
-            if in_library:
-                in_lib = 1
-            else:
+            try:
+                doc_json = self.library.get_document(ref_doi, return_json=True)
+                has_file = doc_json.get('file_attached')
+                if has_file:
+                    in_lib = 2
+                else:
+                    in_lib = 1
+            except Exception:
                 in_lib = 0
 
         # Cut off length of small text to fit within window
@@ -455,8 +491,10 @@ class Window(QWidget):
         # Make widget background color green if document is in library.
         # Red if not in library.
         # Neutral if there is no DOI
-        if in_lib == 1:
+        if in_lib == 2:
             ref_label.setStyleSheet("background-color: rgba(0,255,0,0.25);")
+        elif in_lib == 1:
+            ref_label.setStyleSheet("background-color: rgba(255,165,0,0.25);")
         elif in_lib == 0:
             ref_label.setStyleSheet("background-color: rgba(255,0,0,0.25);")
 
@@ -505,7 +543,7 @@ class Window(QWidget):
 
         # Try to add, have separate windows for each possible error
         try:
-            self.library.add_to_library(doi)
+            self.library.add_to_library(doi, skip_scopus=True)
         except UnsupportedPublisherError as exc:
             log(method='gui.Window.add_to_library_from_label', message='Publisher unsupported', error=str(exc), doi=doi,
                 ref_index=index, main_lookup=referencing_paper)
@@ -624,6 +662,10 @@ class Window(QWidget):
                 return
             else:
                 return
+        except Exception as exe:
+            QMessageBox.warning(self, 'Warning', str(exe))
+            return
+
         notes = doc_response_json.get('notes')
         self.tnw = TabbedNotesWindow(parent=self, notes=notes, doc_json=doc_response_json, label=label)
         self.tnw.show()
@@ -771,16 +813,24 @@ class Window(QWidget):
 
                     reply = msgBox.exec_()
 
-                    print(reply)
-
                     # If the user chose to delete, exit this function.
                     if reply != QMessageBox.Accepted:
                         return
 
             if label is not None:
-                label.setStyleSheet("background-color: rgba(0,255,0,0.25);")
+                if has_file is not None:
+                    if has_file:
+                        label.setStyleSheet("background-color: rgba(0,255,0,0.25);")
+                    else:
+                        label.setStyleSheet("background-color: rgba(255,165,0,0.25);")
+                else:
+                    label.setStyleSheet("background-color: rgba(0,255,0,0.25);")
             else:
-                self.is_in_lib = True
+                if has_file is not None:
+                    if has_file:
+                        self.is_in_lib = 2
+                    else:
+                        self.is_in_lib = 1
         else:
             if adding:
                 if popups:
