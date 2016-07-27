@@ -48,17 +48,16 @@ class EntryWindow(QWidget):
         self.library_interface = LibraryInterface()
         self.library = self.library_interface.create()
         self.api = API()
+        self.textEntryView = TextEntryView()
+        self.textEntryData = TextEntryData()
+        self.fModel = FunctionModel(self)
+        self.data = Data()
 
         # Connect copy to clipboard shortcut
         self.copy_shortcut = QShortcut(QKeySequence("Ctrl+C"), self)
         self.copy_shortcut.activated.connect(_copy_to_clipboard)
 
-        # Keeping track of searched DOIs
-
         self.initUI()
-        self.data = Data()
-        self.fModel = FunctionModel()
-        self.response_message_dict = self._create_message_dict()
 
     def initUI(self):
 
@@ -73,8 +72,7 @@ class EntryWindow(QWidget):
         self.get_references = QPushButton('Get References')
         self.open_notes = QPushButton('Open Notes')
         self.add_to_lib = QPushButton('Add to Library')
-        self.stacked_responses = QStackedWidget()
-        self.status_label = QLabel('')
+        self.response_label = QLabel()
         self.ref_area = QScrollArea()
         self.get_all_refs = QPushButton('Add All References')
         self.resolve_dois = QPushButton('Resolve DOIs to References')
@@ -87,7 +85,7 @@ class EntryWindow(QWidget):
         self.add_to_lib.clicked.connect(self.add_to_library_from_main)
         self.get_all_refs.clicked.connect(self.add_all_refs)
         self.resolve_dois.clicked.connect(self.get_all_dois)
-        self.refresh.clicked.connect(self.resync)
+        self.refresh.clicked.connect(self.fModel.resync)
 
         # Format indicator button
         self.indicator.setStyleSheet("""QPushButton {
@@ -145,14 +143,13 @@ class EntryWindow(QWidget):
         self.vbox.addWidget(self.entryLabel)
         self.vbox.addLayout(textline)
         self.vbox.addLayout(checkboxes)
-        self.vbox.addWidget(self.stacked_responses)
-        self.vbox.addWidget(self.status_label)
+        self.vbox.addWidget(self.response_label)
         self.vbox.addWidget(self.ref_area)
         self.vbox.addWidget(self.get_all_refs)
         self.vbox.addWidget(self.resolve_dois)
         self.vbox.addStretch(1)
 
-        self.status_label.hide()
+        self.response_label.hide()
 
         # Set layout to be the vertical box.
         self.setLayout(self.vbox)
@@ -161,13 +158,18 @@ class EntryWindow(QWidget):
         self.copy_shortcut = QShortcut(QKeySequence("Ctrl+C"), self)
         self.copy_shortcut.activated.connect(_copy_to_clipboard)
 
-        # Create TextEntryView object
+        # Populate TextEntryView object
         button_list = [self.doi_check, self.url_check]
         button_names = ['doi', 'url']
-        self.textEntryView = TextEntryView(self.textEntry, button_list, button_names)
 
-        # Create TextEntryData object
-        self.textEntryData = TextEntryData(self.textEntryView, self.library)
+        self.textEntryView.textbox = self.textEntry
+        self.textEntryView.button_list = button_list
+        self.textEntryView.button_names = button_names
+
+        # Populate TextEntryData object
+        self.textEntryData.view = self.textEntryView
+        self.textEntryData.user_library = self.library
+        self.textEntryData.window = self
 
         # Sizing, centering, and showing
         self.resize(500,700)
@@ -201,8 +203,9 @@ class EntryWindow(QWidget):
                                             background-color: rgba(255, 0, 0, 0.25); }""")
             self.is_in_lib = 0
 
+    '''
     def resync(self):
-        self._set_response_message('resync')
+        self._set_response_message('Re-syncing with Mendeley...')
         self.library.sync()
         if self.ref_items_layout.count() > 1:
             for x in range(1, self.ref_items_layout.count()):
@@ -219,25 +222,25 @@ class EntryWindow(QWidget):
                     else:
                         label.setStyleSheet("background-color: rgba(255,0,0,0.25);")
         self.update_indicator()
-        self.stacked_responses.hide()
+        self.response_label.hide()
+    '''
 
     def get_refs(self):
         """
         Gets references for paper corresponding to the DOI in text field.
         Displays reference information in scrollable area.
         """
-        self.stacked_responses.hide()
+        self.response_label.hide()
 
         # Get DOI from text field and handle blank entry
         entered_doi = self._get_doi()
-        self._populate_response_widget()
 
         if entered_doi == '':
-            self._set_response_message('enter text')
+            self._set_response_message('Please enter text above.')
             return
 
         # Resolve DOI and get references
-        refs = self.fModel.retrieve_refs(doi=entered_doi, entryWindow=self)
+        refs = self.fModel.retrieve_refs(doi=entered_doi)
 
 
         if len(refs) == 0:
@@ -253,7 +256,7 @@ class EntryWindow(QWidget):
             ref_label = self.ref_to_label(ref)
             self.ref_items_layout.insertWidget(self.ref_area_layout.count() - 1, ref_label)
 
-        self.stacked_responses.hide()
+        self.response_label.hide()
         self.ref_area.show()
 
     #
@@ -270,6 +273,9 @@ class EntryWindow(QWidget):
             return
 
         doi = self._get_doi()
+        if doi is None or doi == '':
+            self._set_response_message('Please enter text above.')
+            return
 
         try:
             self.library.add_to_library(doi)
@@ -289,7 +295,7 @@ class EntryWindow(QWidget):
             log(method='gui.Window.add_to_library_from_main', error=str(exc), doi=doi)
             QMessageBox.warning(self, 'Warning', str(exc))
 
-        self._update_document_status(doi, adding=True)
+        self.textEntryData.update_document_status(doi, adding=True)
         self.update_indicator()
 
     def add_all_refs(self):
@@ -303,11 +309,11 @@ class EntryWindow(QWidget):
             self.get_refs()
 
         main_doi = self._get_doi()
-        self.status_label.show()
+        self.response_label.show()
 
-        self.fModel.add_all_refs(main_doi=main_doi, entryWindow=self, ref_labels=self.ref_items_layout)
+        self.fModel.add_all_refs(main_doi=main_doi, ref_labels=self.ref_items_layout)
 
-        self.status_label.hide()
+        self.response_label.hide()
 
     def get_all_dois(self):
         """
@@ -318,7 +324,7 @@ class EntryWindow(QWidget):
         if self.ref_items_layout.count() == 1:
             self.get_refs()
 
-        self.status_label.show()
+        self.response_label.show()
 
         citing_doi = self._get_doi()
 
@@ -328,8 +334,8 @@ class EntryWindow(QWidget):
             if label.doi is not None:
                 continue
 
-            self.status_label.setText('Finding DOI for: ' + label.small_text)
-            self.status_label.repaint()
+            self.response_label.setText('Finding DOI for: ' + label.small_text)
+            self.response_label.repaint()
             qApp.processEvents()
 
             authors = label.reference.get('authors')
@@ -369,9 +375,9 @@ class EntryWindow(QWidget):
                     # reflect the change.
                     db.update_reference_field(identifying_value=title, updating_field=['doi', 'title'],
                                         updating_value=[doi, title], filter_by_title=True)
-            self._update_document_status(doi=doi, label=label, adding=True, popups=False, sync=False)
+            label.update_status(doi=doi, adding=True, popups=False, sync=False)
 
-        self.status_label.hide()
+        self.response_label.hide()
         self.library.sync()
 
 
@@ -411,6 +417,9 @@ class EntryWindow(QWidget):
                 ref_first_authors = ref_author_list[0] + ', ' + ref_author_list[1] + ', et al.'
             else:
                 ref_first_authors = ref_full_authors
+        else:
+            ref_first_authors = ''
+            ref_full_authors = ''
 
         # Initialize indicator about whether reference is in library
         in_lib = 3
@@ -525,7 +534,10 @@ class EntryWindow(QWidget):
             return
         doc_id = doc_json.get('id')
         self.api.documents.move_to_trash(doc_id)
-        self._update_document_status(doi, label=label)
+        if label is not None:
+            label.update_status(doi)
+        else:
+            self.textEntryData.update_document_status(doi=doi)
 
 
     # ++++++++++++++++++++++++++++++++++++++++++++
@@ -564,45 +576,17 @@ class EntryWindow(QWidget):
             entered_doi = self._get_doi()
         else: entered_doi = doi
 
-        self._populate_response_widget()
-
         if entered_doi == '':
             return False
         in_library = self.library.check_for_document(entered_doi)
         return in_library
 
-    def _populate_response_widget(self):
-        """
-        Adds label widgets to hidden widget.
-        Only appears if a function is used without entering text.
-        """
-        if self.stacked_responses.count() < 3:
-            self.stacked_responses.addWidget(QLabel('Please enter text above.'))
-            self.stacked_responses.addWidget(QLabel('Querying Scopus...'))
-            self.stacked_responses.addWidget(QLabel('Re-syncing with Mendeley...'))
-            self.stacked_responses.hide()
-
     def _set_response_message(self, message):
         """
         Sets the line of text to indicate program status.
         """
-        widget_index = self.response_message_dict.get(message)
-        if widget_index is None:
-            return
-
-        self.stacked_responses.setCurrentIndex(widget_index)
-        self.stacked_responses.show()
-
-    def _create_message_dict(self):
-        """
-        Maps intuitive status messages to their stacked_responses index
-        """
-        md = dict()
-        md['enter text'] = 0
-        md['scopus query'] = 1
-        md['resync'] = 2
-
-        return md
+        self.response_label.setText(message)
+        self.response_label.show()
 
     def _populate_data(self, info):
         """
@@ -624,19 +608,16 @@ class EntryWindow(QWidget):
         self.data.small_ref_labels = []
         self.data.expanded_ref_labels = []
 
-    def _update_document_status(self, doi, label=None, adding=False, popups=True, sync=True):
+    '''
+    def _update_document_status(self, doi, adding=False, popups=True, sync=True):
         """
         Updates the indicators about whether a certain paper is in the user's library.
-        If from a reference label, change color of that label.
-        If from the main window, change color of indicator.
+        Change color of indicator.
 
         Parameters
         ----------
         doi : str
             DOI of the paper to check for.
-        label : ReferenceLabel
-            Reference label of the paper in question (if being updated
-            from the references box)
         adding : bool
             Indicates whether a paper is being added or deleted.
         """
@@ -666,31 +647,20 @@ class EntryWindow(QWidget):
                     if reply != QMessageBox.Accepted:
                         return
 
-            if label is not None:
-                if has_file is not None:
-                    if has_file:
-                        label.setStyleSheet("background-color: rgba(0,255,0,0.25);")
-                    else:
-                        label.setStyleSheet("background-color: rgba(255,165,0,0.25);")
+            if has_file is not None:
+                if has_file:
+                    self.is_in_lib = 2
                 else:
-                    label.setStyleSheet("background-color: rgba(0,255,0,0.25);")
-            else:
-                if has_file is not None:
-                    if has_file:
-                        self.is_in_lib = 2
-                    else:
-                        self.is_in_lib = 1
+                    self.is_in_lib = 1
         else:
             if adding:
                 if popups:
                     QMessageBox.warning(self, 'Warning', 'An error occurred during sync.\n'
                                         'Document may not have been added.')
-            if label is not None:
-                label.setStyleSheet("background-color: rgba(255,0,0,0.25);")
-            else:
-                self.update_indicator()
+            self.update_indicator()
+    '''
 
-
+'''
 class NotesWindow(QWidget):
     """
     This is the smaller window that appears displaying notes for a given reference.
@@ -786,6 +756,8 @@ class NotesWindow(QWidget):
             first_authors = ', '.join(first_authors)
             if len(lastnames) > 2:
                 first_authors = first_authors + ', et al.'
+        else:
+            first_authors = ''
 
         self.caption = ''
 
@@ -823,6 +795,7 @@ class NotesWindow(QWidget):
             QCloseEvent.accept()
         else:
             QCloseEvent.ignore()
+'''
 
 
 class TabbedNotesWindow(QTabWidget):
@@ -1017,6 +990,8 @@ class TabbedNotesWindow(QTabWidget):
                 first_authors = ', '.join(first_authors)
                 if len(lastnames) > 2:
                     first_authors = first_authors + ', et al.'
+            else:
+                first_authors = ''
 
         self.caption = ''
 
@@ -1072,10 +1047,10 @@ class TabbedNotesWindow(QTabWidget):
 
 
 class TextEntryView(object):
-    def __init__(self, textbox, button_list, button_names):
-        self.textbox = textbox
-        self.button_list = button_list
-        self.button_names = button_names
+    def __init__(self):
+        self.textbox = None
+        self.button_list = None
+        self.button_names = None
 
     @property
     def input_type(self):
@@ -1085,10 +1060,11 @@ class TextEntryView(object):
 
 
 class TextEntryData(object):
-    def __init__(self, textview, user_library, window):
-        self.view = textview
-        self.user_library = user_library
-        self.window = window
+    def __init__(self):
+        self.view = None
+        self.user_library = None
+        self.window = None
+        self.is_in_lib = 0
 
     def update_indicator(self):
         """
@@ -1111,18 +1087,71 @@ class TextEntryData(object):
                                             background-color: rgba(255, 0, 0, 0.25); }""")
             self.is_in_lib = 0
 
+    def update_document_status(self, doi, adding=False, popups=True, sync=True):
+        """
+        Updates the indicators about whether a certain paper is in the user's library.
+        Change color of indicator.
+
+        Parameters
+        ----------
+        doi : str
+            DOI of the paper to check for.
+        adding : bool
+            Indicates whether a paper is being added or deleted.
+        """
+        if sync:
+            self.user_library.sync()
+
+        exists = self.user_library.check_for_document(doi)
+        if exists:
+            doc_json = self.user_library.get_document(doi, return_json=True)
+            has_file = doc_json.get('file_attached')
+            if has_file is not None:
+                # If no file is found, there may have been an error.
+                # Give users the ability to delete the document that was added without file.
+                if not has_file:
+                    msgBox = QMessageBox()
+                    msgBox.setText('Document was added without a file attached.\n'
+                                   'If this was in error, you may choose to delete\n'
+                                   'the file and add again. Otherwise, ignore this message.')
+                    delete_button = QPushButton('Delete')
+                    msgBox.addButton(delete_button, QMessageBox.RejectRole)
+                    delete_button.clicked.connect(lambda: self.window.move_doc_to_trash(doi=doi))
+                    msgBox.addButton(QPushButton('Ignore'), QMessageBox.AcceptRole)
+
+                    reply = msgBox.exec_()
+
+                    # If the user chose to delete, exit this function.
+                    if reply != QMessageBox.Accepted:
+                        return
+
+            if has_file is not None:
+                if has_file:
+                    self.is_in_lib = 2
+                else:
+                    self.is_in_lib = 1
+        else:
+            if adding:
+                if popups:
+                    QMessageBox.warning(self.window, 'Warning', 'An error occurred during sync.\n'
+                                        'Document may not have been added.')
+            self.update_indicator()
 
 class FunctionModel(object):
-    def retrieve_refs(self, doi, entryWindow):
+    def __init__(self, window):
+        # Pass in the instance of the EntryWindow
+        self.window = window
+
+    def retrieve_refs(self, doi):
         refs = []
         try:
-            entryWindow._set_response_message('scopus query')
+            self.window._set_response_message('Querying Scopus...')
             paper_info = rr.retrieve_all_info(input=doi, input_type='doi')
             refs = paper_info.references
 
             # If the paper is in the library and has no references, try
             # retrieving references from online (not from saved database).
-            if len(refs) == 0 and entryWindow.is_in_lib in (1,2):
+            if len(refs) == 0 and self.window.is_in_lib in (1,2):
                 refs = rr.retrieve_references(doi=doi)
 
                 # If references are found, add them to the saved database.
@@ -1132,41 +1161,64 @@ class FunctionModel(object):
                         db.add_reference(ref, main_doi=doi, main_title=title)
                 paper_info.references = refs
 
-            entryWindow._populate_data(paper_info)
+            self.window._populate_data(paper_info)
 
         except UnsupportedPublisherError as exc:
             log(method='gui.Window.get_refs', message='Unsupported Publisher', error=str(exc), doi=doi)
-            QMessageBox.warning(entryWindow, 'Warning', 'Unsupported Publisher')
+            QMessageBox.warning(self.window, 'Warning', 'Unsupported Publisher')
             return
         except ParseException or AttributeError as exc:
             log(method='gui.Window.get_refs', message='Error parsing journal page', error=str(exc), doi=doi)
-            QMessageBox.warning(entryWindow, 'Warning', 'Error parsing journal page')
+            QMessageBox.warning(self.window, 'Warning', 'Error parsing journal page')
             return
-        except Exception as exc:
-            log(method='gui.Window.get_refs', error=str(exc), doi=doi)
-            QMessageBox.warning(entryWindow, 'Warning', str(exc))
+        #except Exception as exc:
+        #    log(method='gui.Window.get_refs', error=str(exc), doi=doi)
+        #    QMessageBox.warning(self.window, 'Warning', str(exc))
 
         return refs
 
-    def add_all_refs(self, main_doi, entryWindow, ref_labels):
+    def add_all_refs(self, main_doi, ref_labels):
         for x in range(1, ref_labels.count()):
             label = ref_labels.itemAt(x).widget()
             doi = label.doi
-            entryWindow.status_label.setText('Adding: ' + label.small_text)
-            entryWindow.status_label.repaint()
+            self.window.response_label.setText('Adding: ' + label.small_text)
+            self.window.response_label.repaint()
             qApp.processEvents()
 
-            label.add_to_library_from_label(label, doi, index=x, referencing_paper=main_doi, popups=False,
+            label.add_to_library_from_label(doi, index=x, referencing_paper=main_doi, popups=False,
                 update_status=False)
 
         # Sync the library
-        entryWindow.library.sync()
+        self.window.library.sync()
 
         # Update all of the labels
         for x in range(1, ref_labels.count()):
             label = ref_labels.itemAt(x).widget()
-            doi = label.doi
-            entryWindow._update_document_status(doi=doi, label=label, adding=True, popups=False, sync=False)
+            label.update_status(doi=label.doi, adding=True, popups=False, sync=False)
+
+    def resync(self):
+        self.window._set_response_message('Re-syncing with Mendeley...')
+        self.window.library.sync()
+        if self.window.ref_items_layout.count() > 1:
+            for x in range(1, self.window.ref_items_layout.count()):
+                label = self.window.ref_items_layout.itemAt(x).widget()
+                doi = label.doi
+                if doi is not None:
+                    # Attempt to retrieve JSON about the document - will fail if doc isn't found
+                    try:
+                        doc_json = self.window.library.get_document(doi=doi, return_json=True)
+                    except DocNotFoundError:
+                        label.setStyleSheet("background-color: rgba(255,0,0,0.25);")
+                        continue
+
+                    # This is reached only if document exists
+                    has_file = doc_json.get('file_attached')
+                    if has_file is not None and has_file:
+                        label.setStyleSheet("background-color: rgba(0,255,0,0.25);")
+                    else:
+                        label.setStyleSheet("background-color: rgba(255,165,0,0.25);")
+        self.window.update_indicator()
+        self.window.response_label.hide()
 
 
 class ReferenceLabel(QLabel):
@@ -1305,7 +1357,9 @@ class ReferenceLabel(QLabel):
             return
 
         # Check that the paper isn't already in the user's library
-        if self.parent._check_lib(doi):
+        # TODO: Change this to checking the database, not Mendeley
+        #if self.parent._check_lib(doi):
+        if db.check_for_document(doi):
             if popups:
                 QMessageBox.information(entryWindow, 'Information', 'Paper is already in library.')
             return
@@ -1343,7 +1397,7 @@ class ReferenceLabel(QLabel):
                 QMessageBox.warning(entryWindow, 'Warning', str(exc))
 
         if update_status:
-            self.parent._update_document_status(doi, label=self, adding=True, popups=popups)
+            self.update_status(doi, adding=True, popups=popups)
 
     def lookup_ref(self, doi):
         """
@@ -1361,6 +1415,61 @@ class ReferenceLabel(QLabel):
         self.parent.textEntry.setText(doi)
         self.parent.get_refs()
 
+    def update_status(self, doi, adding=False, popups=True, sync=True):
+        """
+        Updates the indicators about whether a certain paper is in the user's library.
+        If from a reference label, change color of that label.
+        If from the main window, change color of indicator.
+
+        Parameters
+        ----------
+        doi : str
+            DOI of the paper to check for.
+        adding : bool
+            Indicates whether a paper is being added or deleted.
+        """
+        if sync:
+            self.parent.library.sync()
+
+        exists = self.parent.library.check_for_document(doi)
+        if exists:
+            doc_json = self.parent.library.get_document(doi, return_json=True)
+            has_file = doc_json.get('file_attached')
+            if has_file is not None:
+                # If no file is found, there may have been an error.
+                # Give users the ability to delete the document that was added without file.
+                if not has_file:
+                    msgBox = QMessageBox()
+                    msgBox.setText('Document was added without a file attached.\n'
+                                   'If this was in error, you may choose to delete\n'
+                                   'the file and add again. Otherwise, ignore this message.')
+                    delete_button = QPushButton('Delete')
+                    msgBox.addButton(delete_button, QMessageBox.RejectRole)
+                    delete_button.clicked.connect(lambda: self.parent.move_doc_to_trash(doi=doi, label=self))
+                    msgBox.addButton(QPushButton('Ignore'), QMessageBox.AcceptRole)
+
+                    reply = msgBox.exec_()
+
+                    # If the user chose to delete, exit this function.
+                    if reply != QMessageBox.Accepted:
+                        return
+
+            if has_file is not None:
+                if has_file:
+                    self.setStyleSheet("background-color: rgba(0,255,0,0.25);")
+                else:
+                    self.setStyleSheet("background-color: rgba(255,165,0,0.25);")
+            else:
+                self.setStyleSheet("background-color: rgba(0,255,0,0.25);")
+
+        else:
+            if adding:
+                if popups:
+                    QMessageBox.warning(self, 'Warning', 'An error occurred during sync.\n'
+                                        'Document may not have been added.')
+            self.setStyleSheet("background-color: rgba(255,0,0,0.25);")
+
+
 
 class LibraryInterface(object):
     def create(self):
@@ -1377,13 +1486,18 @@ class Data(object):
         self.references = None
         self.entry = None
         self.doi = None
-        self.idnum = None
         self.scraper_obj = None
         self.url = None
         self.pdf_link = None
         self.doc_response_json = None
         self.small_ref_labels = []
         self.expanded_ref_labels = []
+
+    def __repr__(self):
+        return u'' + \
+            'Title: %s' % self.entry.get('title') + \
+            'Author: %s' % self.entry.get('authors') + \
+            'DOI: %s' % self.doi
 
 
 # This is meant to be a popup that appears when the GUI is launched
