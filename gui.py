@@ -551,6 +551,7 @@ class EntryWindow(QWidget):
         need to implement link_to_doi and resolve_link in reference_resolver.
         """
         text = self.textEntry.text()
+        text = text.strip()
 
         if self.doi_check.isChecked():
             return text
@@ -1186,7 +1187,7 @@ class FunctionModel(object):
             qApp.processEvents()
 
             label.add_to_library_from_label(doi, index=x, referencing_paper=main_doi, popups=False,
-                update_status=False)
+                update_status=False, adding_all=True)
 
         # Sync the library
         self.window.library.sync()
@@ -1337,7 +1338,8 @@ class ReferenceLabel(QLabel):
     # ++++++++++++++++++++++++++++++++++++++++++++
     # ============================================ Reference Label Right-Click Functions
     # ++++++++++++++++++++++++++++++++++++++++++++
-    def add_to_library_from_label(self, doi, index=None, referencing_paper=None, popups=True, update_status=True):
+    def add_to_library_from_label(self, doi, index=None, referencing_paper=None, popups=True,
+                                  update_status=True, adding_all=False):
         """
         Adds reference paper to library from right-clicking on a label.
 
@@ -1357,12 +1359,20 @@ class ReferenceLabel(QLabel):
             return
 
         # Check that the paper isn't already in the user's library
-        # TODO: Change this to checking the database, not Mendeley
-        #if self.parent._check_lib(doi):
-        if db.check_for_document(doi):
-            if popups:
-                QMessageBox.information(entryWindow, 'Information', 'Paper is already in library.')
-            return
+        # If all references are added at once, there are no library syncs in between, so
+        # check database for duplicates before adding.
+        if adding_all:
+            if db.check_for_document(doi):
+                if popups:
+                    QMessageBox.information(entryWindow, 'Information', 'Paper is already in library.')
+        # If one reference is being added at a time, check the library for duplicates
+        # before adding.
+        else:
+            if self.parent._check_lib(doi):
+                if popups:
+                    QMessageBox.information(entryWindow, 'Information', 'Paper is already in library.')
+                return
+
 
         # Try to add, have separate windows for each possible error
         try:
