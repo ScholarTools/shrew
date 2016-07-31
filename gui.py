@@ -7,9 +7,13 @@ from PyQt5.QtCore import *
 from PyQt5.QtGui import *
 
 # Local
+
+#JAH: Move this into the Library interface code ...
 from mendeley import client_library
 from mendeley.api import API
 from mendeley import db_interface as db
+
+
 import reference_resolver as rr
 from pypub.utils import get_truncated_display_string as td
 from error_logging import log
@@ -45,9 +49,21 @@ class EntryWindow(QWidget):
     """
     def __init__(self):
         super().__init__()
+
+        #JAH: should be:
+        #self.library = LibraryInterface.create('Mendeley')
         self.library_interface = LibraryInterface()
+        
+        #JAH: This removes all abstraction from the library (which is not good)
         self.library = self.library_interface.create()
+
+        #JAH: No!        
         self.api = API()
+        
+        #JAH:
+        #self.textEntry = TextEntryData(self,self.library)            
+        
+        #JAH: The controller shouldn't touch the view, only the data should
         self.textEntryView = TextEntryView()
         self.textEntryData = TextEntryData()
         self.fModel = FunctionModel(self)
@@ -163,6 +179,7 @@ class EntryWindow(QWidget):
         self.copy_shortcut.activated.connect(_copy_to_clipboard)
 
         # Populate TextEntryView object
+        #JAH: The class should be doing this ...
         button_list = [self.doi_check, self.url_check]
         button_names = ['doi', 'url']
 
@@ -316,15 +333,49 @@ class EntryWindow(QWidget):
         doi : str
             DOI of the paper to be deleted.
         """
+        
+        """
+        JAH: New code:
+        
+        type = self.textEntry.type
+        value = self.textEntry.text
+        
+        if type == 'doi'
+            #NOTE: library should be pointing to the interface, not directly to the library
+            response = self.library.move_to_trash(doi=value)
+        elseif type == 'url'
+            doi = self._get_doi()
+            response = self.library.move_to_trash(doi=value)
+        elif type == 'pmid'
+            response = self.library.move_to_trash(pmid=value)
+            
+        if response.success:
+            #TODO: I'm not sure how best to implement this
+            #perhaps self.textEntryData.update_document_status(deleted=True)
+            self.textEntryData.update_document_status(doi=doi)
+        elif response.status = 'not in library'
+            #New function ...
+            self._send_msg('Document is not in your library')
+        """
+        
         doi = self._get_doi()
         if doi is None:
             QMessageBox.warning(entryWindow, 'Warning', 'Must provide either a DOI or label to move doc to trash')
             return
+            
+        #JAH: self.library.move_to_trash(doi=doi)
+        #That method can return a canned status response if it can't
+        #because the document is not in the library 
+        #The interface can even do the check and then move to trash if not found
+        #if the library itself doesn't implement this functionality
+            
         doc_json = self.library.get_document(doi, return_json=True)
         if doc_json is None:
             QMessageBox.information(entryWindow, 'Information', 'Document is not in your library.')
             return
         doc_id = doc_json.get('id')
+        
+        #JAH: Don't touch the library api, ask the library to do something
         self.api.documents.move_to_trash(doc_id)
         self.textEntryData.update_document_status(doi=doi)
 
@@ -549,9 +600,18 @@ class EntryWindow(QWidget):
         Right now, the URL option is not supported. To do this I'll
         need to implement link_to_doi and resolve_link in reference_resolver.
         """
-        text = self.textEntry.text()
+        #JAH: The stripping should be done by textEntry
+        text = self.textEntry.text()  #Why is text() a method and not a property?
         text = text.strip()
 
+        #JAH: I would consider moving this into something like textEntryOptions
+        #
+        #then:
+        #selected_type = self.textEntryOptions.selected_type
+        #if selected_type == 'doi'
+        #
+        #   You could even ask this of textEntry, which could hold onto its
+        #   own options
         if self.doi_check.isChecked():
             return text
         else:
@@ -1060,6 +1120,49 @@ class TextEntryView(object):
 
 
 class TextEntryData(object):
+    
+    """
+    
+    New name DocSelector    
+    
+    New layout:
+    -----------
+    self._text_view => points to TextEntryView
+    self._type_selectors => Deals with the selectors
+    self.type
+    self.value
+    self.status #rather than is_in_lib
+    
+    @property
+    def type()
+        #perform logic on _type_selectors
+
+    @property
+    def value()
+        #perform logic on _text_view
+
+    @property
+    def status()
+        return self._status
+        
+    @status.setter
+    def status(self,value)
+        #This method can be called by the window when:
+        #1) Processing the current information to "load" a document
+        #2) Upon deleting a document
+        #3) Upon syncing    
+    
+        self._status = value
+        self._text_view.status = value #This should call a setter method that redraws accordingly
+        
+    
+    
+    
+    
+    
+    """    
+    
+    
     def __init__(self):
         self.view = None
         self.user_library = None
@@ -1070,11 +1173,53 @@ class TextEntryData(object):
         # 1 --> DOI is found, but there is no file (indicator orange)
         # 2 --> DOI is found, with file attached (indicator green)
         self.is_in_lib = 0
+        
+        #JAH: Consider these as well -> they can be derived properties (@property)
+        #self.has_entry
+        #self.has_attached_file
+
+
+    """
+    @property
+    def is_in_lib(self):
+        return self._is_in_lib
+    
+    @is_in_lib.setter
+    def is_in_lib(self,value):
+        self._is_in_lib = value
+        self.view.status = value #This should call a setter method that redraws
+    
+    
+    def get_document(self):
+        #Query view, return document (or None) to window
+        #Update status accordingly        
+    
+    def update_status(self,deleted=False,file_removed):
+        #Handle updates accordingly
+        #Logic of updating the data should come from the window
+        #The window is then just passing along some basic messages
+    
+    """
+
 
     def update_indicator(self):
         """
         Updates indicator button color if the DOI in the text field is in user's library.
         """
+        
+        #JAH: I think this class should handle this ...
+        '''
+        #Method name could change, 
+        doc = self.library.get_doc(missing_ok=True)
+        if doc is None:
+            self.is_in_lib = 0 #The view draws, this shouldn't
+        else:
+            if doc.has_file:
+                self.is_in_lib = 2
+            else:
+                self.is_in_lib = 1
+        '''
+        
         in_library = self.window._check_lib()
         if in_library:
             self.window.data.doc_response_json = self.user_library.get_document(self.window._get_doi(), return_json=True)
@@ -1087,6 +1232,7 @@ class TextEntryData(object):
                                                 background-color: rgba(255,165,0,0.25); }""")
                 self.is_in_lib = 1
         else:
+            #JAH: This is too much of a reach into the class
             self.window.data.doc_response_json = None
             self.window.indicator.setStyleSheet("""QPushButton {
                                             background-color: rgba(255, 0, 0, 0.25); }""")
@@ -1104,6 +1250,9 @@ class TextEntryData(object):
         adding : bool
             Indicates whether a paper is being added or deleted.
         """
+        
+        #JAH: How is this different than update_indicator?
+        #This name is probably better ...
         if sync:
             self.user_library.sync()
 
@@ -1515,6 +1664,12 @@ class ReferenceLabel(QLabel):
 
 
 class LibraryInterface(object):
+    
+    #JAH: This code should implement methods on the library
+    #or alternatively just have abstract methods which other classes implement 
+    #
+    #to start it can just handle initializing the MendeleyLibraryInterface       
+    
     def create(self):
         """
         Creates instance of the user library
@@ -1522,6 +1677,11 @@ class LibraryInterface(object):
         Returns: UserLibrary object
         """
         return client_library.UserLibrary()
+        
+class MendeleyLibraryInterface(LibraryInterface):
+    
+    def __init__(self):
+        self.h = client_library.UserLibrary()
 
 
 class Data(object):
