@@ -160,6 +160,54 @@ class EntryWindow(QWidget):
         # Populate with widgets and add stretch space at the bottom.
         self.vbox = QVBoxLayout()
         self.vbox.addWidget(self.entryLabel)
+        
+        
+        
+        
+        self.doc_selector = DocSelector()
+        
+        view = self.doc_selector.initialize_view(self)
+        #
+        #   def initialize_view(self,window_instance)
+        #       self.view = DocSelectorView
+        #       return self.view
+        #   
+        
+        self.vbox.addLayout(view.text_layout)
+        
+        
+        
+        
+        #In __init__ for DocSelectorView
+        #def __init__(self,window):
+        #   TODO: Also handle initialization of callbacks
+        #
+        #   self.textEntry.textChanged.connect(window.textChanged)
+        #
+        #           self.textEntry.textChanged.connect(self.textEntryData.update_indicator)
+        self.textEntry.returnPressed.connect(self.get_refs)
+        #
+        #   self.indicator.setStyleSheet("""QPushButton {
+        #                                background-color: rgba(0,0,0,0.25);
+        #                                }""")
+        #   self.indicator.setAutoFillBackground(True)
+        #   self.indicator.setFixedSize(20,20)
+        #   self.indicator.setToolTip("Green: doc DOI in library.\n"
+        #                          "Yellow: doc missing file.\n"
+        #                          "Red: no doc with DOI found.")        
+        
+        
+        #           textline = QHBoxLayout()
+        #       textline.addWidget(self.indicator)
+        #       textline.addWidget(self.textEntry)
+        #       self.text_layout = textline
+        
+        
+        
+        
+        
+        
+        
         self.vbox.addLayout(textline)
         self.vbox.addLayout(checkboxes)
         self.vbox.addLayout(line2)
@@ -1107,16 +1155,54 @@ class TabbedNotesWindow(QTabWidget):
 
 
 class TextEntryView(object):
-    def __init__(self):
+
+    #DocSelectorView
+    #- text entry
+    #- type selectors    
+    
+    def __init__(self,window):
+        
+        self.indicator = newTextColor(position=Window.position)
+                
+        
+        
+        
         self.textbox = None
         self.button_list = None
         self.button_names = None
+        
+        
+        
 
     @property
     def input_type(self):
         for x in range(0, len(self.button_list)):
             if self.button_list[x].isChecked():
                 return self.button_names[x]
+                
+    @status.setter
+    def status(self,value):
+        if value == 2:         
+            
+            self.indicator.setStyleSheet("""QPushButton {
+                                                background-color: rgba(0,255,0,0.25); }""")
+                                                
+                                                
+                                                
+                                                
+                                                
+          if self.window.data.doc_response_json['file_attached'] == True:
+                
+                self.is_in_lib = 2
+            else:
+                self.window.indicator.setStyleSheet("""QPushButton {
+                                                background-color: rgba(255,165,0,0.25); }""")
+                self.is_in_lib = 1
+        else:
+            #JAH: This is too much of a reach into the class
+            self.window.data.doc_response_json = None
+            self.window.indicator.setStyleSheet("""QPushButton {
+                                            background-color: rgba(255, 0, 0, 0.25); }""")       
 
 
 class TextEntryData(object):
@@ -1129,9 +1215,29 @@ class TextEntryData(object):
     -----------
     self._text_view => points to TextEntryView
     self._type_selectors => Deals with the selectors
-    self.type
-    self.value
+    self.type - doi, url
+    self.value - raw text (spacing removed)
     self.status #rather than is_in_lib
+    
+    
+    view_callback => main_window.view_changed
+
+    #method in "window"
+    def view_changed(self):
+        type = self.doc_selector.type
+        value = self.doc_selector.value
+        
+        if type == 'doi'
+            response = self.library.check_document_status(doi=value)
+            
+        self.doc_selector.status = response.status
+
+        if response.status > 0
+          #Then update the references   
+    
+    
+    
+    
     
     @property
     def type()
@@ -1156,7 +1262,8 @@ class TextEntryData(object):
         self._text_view.status = value #This should call a setter method that redraws accordingly
         
     
-    
+self.library.sync
+    self.doc_selector.status = 0
     
     
     
@@ -1682,6 +1789,15 @@ class MendeleyLibraryInterface(LibraryInterface):
     
     def __init__(self):
         self.h = client_library.UserLibrary()
+        
+    def get_document(self,doi):
+        pass
+    
+    def trash_document(self,doi):
+        
+        
+
+
 
 
 class Data(object):
