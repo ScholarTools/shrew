@@ -1662,7 +1662,6 @@ class ReferenceLabel(QLabel):
         self.update_status(doi)
 
 
-
 class LibraryInterface(object):
     
     #JAH: This code should implement methods on the library
@@ -1677,7 +1676,8 @@ class LibraryInterface(object):
         Returns: UserLibrary object
         """
         return client_library.UserLibrary()
-        
+
+
 class MendeleyLibraryInterface(LibraryInterface):
     
     def __init__(self):
