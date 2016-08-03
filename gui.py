@@ -23,7 +23,7 @@ import error_logging
 # they're from different locations.
 # from shrew_errors import *
 from mendeley.errors import *
-from pypub_errors import *
+from pypub.pypub_errors import *
 
 
 class EntryWindow(QWidget):
@@ -74,6 +74,8 @@ class EntryWindow(QWidget):
         self.doi_check = QRadioButton('DOI')
         self.doi_check.setChecked(True)
         self.url_check = QRadioButton('URL')
+        self.fulltext_check = QRadioButton('Full Text')
+        self.pmid_check = QRadioButton('PMID')
         self.refresh = QPushButton('Sync with Library')
         self.get_references = QPushButton('Get References')
         self.open_notes = QPushButton('Open Notes')
@@ -122,6 +124,8 @@ class EntryWindow(QWidget):
         checkboxes = QHBoxLayout()
         checkboxes.addWidget(self.doi_check)
         checkboxes.addWidget(self.url_check)
+        checkboxes.addWidget(self.fulltext_check)
+        checkboxes.addWidget(self.pmid_check)
         checkboxes.addWidget(self.refresh)
         checkboxes.addWidget(self.get_references)
         checkboxes.addWidget(self.open_notes)
@@ -197,7 +201,7 @@ class EntryWindow(QWidget):
 
     def text_changed(self):
         doc_id = self.doc_selector.value
-        self._update_document_status(doi=doc_id, sync=False, popups=False)
+        self.update_document_status(doi=doc_id, sync=False, popups=False)
 
     def get_refs(self):
         """
@@ -275,7 +279,7 @@ class EntryWindow(QWidget):
         # Add entry to history
         self.doc_selector.add_to_history(doi)
 
-        self._update_document_status(doi, adding=True)
+        self.update_document_status(doi, adding=True)
 
     def move_to_trash(self, doi=None):
         """
@@ -303,11 +307,14 @@ class EntryWindow(QWidget):
         except DocNotFoundError:
             _send_msg('Document not found in library.')
             return
+        except UnsupportedEntryTypeError:
+            _send_msg('Only functions using DOIs are supported at this time.')
+            return
 
         # Add entry to history
-        self.doc_selector.add_to_history(doi)
+        self.doc_selector.add_to_history(value)
 
-        self._update_document_status(doi=value)
+        self.update_document_status(doi=value)
 
     def follow_refs_forward(self):
         doi = self.doc_selector.value
@@ -513,6 +520,72 @@ class EntryWindow(QWidget):
         self.tnw.show()
 
 
+    # ++++++++++++++++++++++++++++++++++++++++++++
+    # ============================================ Misc. Functions
+    # ++++++++++++++++++++++++++++++++++++++++++++
+    
+    def update_document_status(self, doi=None, adding=False, popups=True, sync=True):
+        """
+        Updates the indicators about whether a certain paper is in the user's library.
+        Change color of indicator.
+
+        Parameters
+        ----------
+        doi : str
+            DOI of the paper to check for.
+        adding : bool
+            Indicates whether a paper is being added or deleted.
+        """
+        if sync:
+            self.library.sync()
+
+        if doi is None:
+            doi = self.doc_selector.value
+            if doi is None:
+                return
+
+        try:
+            doc_json = self.library.get_document(doi, return_json=True)
+        except DocNotFoundError:
+            # Document was not found in library
+            if popups:
+                _send_msg('Document not found in library.\nMay not have been added.')
+            self.data.doc_response_json = None
+            self.doc_selector.status = 0
+        except Exception:
+            if adding:
+                if popups:
+                    _send_msg('An error occurred during sync.\nDocument may not have been added.')
+            self.data.doc_response_json = None
+            self.doc_selector.status = 0
+        else:
+            has_file = doc_json.get('file_attached')
+            if has_file is not None:
+                # If no file is found, there may have been an error.
+                # Give users the ability to delete the document that was added without file.
+                if not has_file:
+                    msgBox = QMessageBox()
+                    msgBox.setText('Document was added without a file attached.\n'
+                                   'If this was in error, you may choose to delete\n'
+                                   'the file and add again. Otherwise, ignore this message.')
+                    delete_button = QPushButton('Delete')
+                    msgBox.addButton(delete_button, QMessageBox.RejectRole)
+                    delete_button.clicked.connect(lambda: self.move_to_trash(doi=doi))
+                    msgBox.addButton(QPushButton('Ignore'), QMessageBox.AcceptRole)
+
+                    reply = msgBox.exec_()
+
+                    # If the user chose to ignore, exit this function.
+                    if reply != QMessageBox.Accepted:
+                        # 1 = document in library without attached file
+                        self.data.doc_response_json = doc_json
+                        self.doc_selector.status = 1
+                        return
+                else:
+                    # 2 = document in library with attached file
+                    self.data.doc_response_json = doc_json
+                    self.doc_selector.status = 2
+
 
     # ++++++++++++++++++++++++++++++++++++++++++++
     # ============================================ Internal Functions
@@ -567,63 +640,6 @@ class EntryWindow(QWidget):
         self.data.url = info.url
         self.data.small_ref_labels = []
         self.data.expanded_ref_labels = []
-
-    def _update_document_status(self, doi, adding=False, popups=True, sync=True):
-        """
-        Updates the indicators about whether a certain paper is in the user's library.
-        Change color of indicator.
-
-        Parameters
-        ----------
-        doi : str
-            DOI of the paper to check for.
-        adding : bool
-            Indicates whether a paper is being added or deleted.
-        """
-        if sync:
-            self.library.sync()
-
-        try:
-            doc_json = self.library.get_document(doi, return_json=True)
-        except DocNotFoundError:
-            # Document was not found in library
-            if popups:
-                _send_msg('Document not found in library.\nMay not have been added.')
-            self.data.doc_response_json = None
-            self.doc_selector.status = 0
-        except Exception:
-            if adding:
-                if popups:
-                    _send_msg('An error occurred during sync.\nDocument may not have been added.')
-            self.data.doc_response_json = None
-            self.doc_selector.status = 0
-        else:
-            has_file = doc_json.get('file_attached')
-            if has_file is not None:
-                # If no file is found, there may have been an error.
-                # Give users the ability to delete the document that was added without file.
-                if not has_file:
-                    msgBox = QMessageBox()
-                    msgBox.setText('Document was added without a file attached.\n'
-                                   'If this was in error, you may choose to delete\n'
-                                   'the file and add again. Otherwise, ignore this message.')
-                    delete_button = QPushButton('Delete')
-                    msgBox.addButton(delete_button, QMessageBox.RejectRole)
-                    delete_button.clicked.connect(lambda: self.move_to_trash(doi=doi))
-                    msgBox.addButton(QPushButton('Ignore'), QMessageBox.AcceptRole)
-
-                    reply = msgBox.exec_()
-
-                    # If the user chose to ignore, exit this function.
-                    if reply != QMessageBox.Accepted:
-                        # 1 = document in library without attached file
-                        self.data.doc_response_json = doc_json
-                        self.doc_selector.status = 1
-                        return
-                else:
-                    # 2 = document in library with attached file
-                    self.data.doc_response_json = doc_json
-                    self.doc_selector.status = 2
 
 
 '''
@@ -1124,8 +1140,9 @@ class DocSelector(object):
         # 2 --> DOI is found, with file attached (indicator green)
         self._status = 0
 
-        self.type_selector_objs = [self.window.doi_check, self.window.url_check]
-        self.type_selector_names = ['doi', 'url']
+        self.type_selector_objs = [self.window.doi_check, self.window.url_check,
+                                   self.window.fulltext_check, self.window.pmid_check]
+        self.type_selector_names = ['doi', 'url', 'fulltext', 'pmid']
 
     @property
     def entry_type(self):
@@ -1229,25 +1246,14 @@ class FunctionModel(object):
     def resync(self):
         self.window._set_response_message('Re-syncing with Mendeley...')
         self.window.library.sync()
+
+        # If references are visible, update their status and label color
         if self.window.ref_items_layout.count() > 1:
             for x in range(1, self.window.ref_items_layout.count()):
                 label = self.window.ref_items_layout.itemAt(x).widget()
-                doi = label.doi
-                if doi is not None:
-                    # Attempt to retrieve JSON about the document - will fail if doc isn't found
-                    try:
-                        doc_json = self.window.library.get_document(doi=doi, return_json=True)
-                    except DocNotFoundError:
-                        label.setStyleSheet("background-color: rgba(255,0,0,0.25);")
-                        continue
+                label.update_status(adding=False, popups=False, sync=False)
 
-                    # This is reached only if document exists
-                    has_file = doc_json.get('file_attached')
-                    if has_file is not None and has_file:
-                        label.setStyleSheet("background-color: rgba(0,255,0,0.25);")
-                    else:
-                        label.setStyleSheet("background-color: rgba(255,165,0,0.25);")
-        self.window.update_indicator()
+        self.window.update_document_status(adding=False, popups=False, sync=False)
         self.window.response_label.hide()
 
 
@@ -1327,18 +1333,18 @@ class ReferenceLabel(QLabel):
         Displays the notes/info window for a paper double-clicked
         from the references window.
         """
-        label = self.sender().parent
-        if label.doi is None:
+        # label = self.sender().parent
+        if self.doi is None:
             _send_msg('No DOI found for this paper.')
             return
 
         try:
-            doc_response_json = self.parent.library.get_document(label.doi, return_json=True)
+            doc_response_json = self.parent.library.get_document(self.doi, return_json=True)
         except DOINotFoundError:
             reply = QMessageBox.question(self.parent,'Message', 'Document not found in library.\nWould you like to add it?',
                                  QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
             if reply == QMessageBox.Yes:
-                self.add_to_library_from_label(label.doi)
+                self.add_to_library_from_label(self.doi)
                 return
             else:
                 return
@@ -1347,10 +1353,10 @@ class ReferenceLabel(QLabel):
             return
 
         notes = doc_response_json.get('notes')
-        self.tnw = TabbedNotesWindow(parent=self, notes=notes, doc_json=doc_response_json, label=label)
+        self.tnw = TabbedNotesWindow(parent=self.parent, notes=notes, doc_json=doc_response_json, label=self)
         self.tnw.show()
 
-    def update_status(self, doi, adding=False, popups=True, sync=True):
+    def update_status(self, adding=False, popups=True, sync=True):
         """
         Updates the indicators about whether a certain paper is in the user's library.
         If from a reference label, change color of that label.
@@ -1364,6 +1370,10 @@ class ReferenceLabel(QLabel):
         """
         if sync:
             self.parent.library.sync()
+
+        doi = self.doi
+        if doi is None:
+            return
 
         try:
             doc_json = self.parent.library.get_document(doi, return_json=True)
@@ -1643,7 +1653,7 @@ class MendeleyLibraryInterface(LibraryInterface):
     # def trash_document(self, doc_id):
     #     self.api.documents.move_to_trash(doc_id=doc_id)
 
-    def trash_document(self, doi=None, url=None, pmid=None):
+    def trash_document(self, doi=None, url=None, pmid=None, fulltext=None):
         """
         Moves a paper from the user's library to trash
         (in Mendeley).
@@ -1670,7 +1680,7 @@ class MendeleyLibraryInterface(LibraryInterface):
         # Catch any other case because URL and PMID searches are
         # not yet implemented at this time.
         else:
-            return UnsupportedEntryTypeError('Must provide a valid ID to move document to trash.'
+            raise UnsupportedEntryTypeError('Must provide a valid ID to move document to trash.'
                                              '\nURL and Pubmed ID is not yet supported.')
 
     def update_document(self, doc_id, notes):
