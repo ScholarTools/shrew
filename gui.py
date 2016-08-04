@@ -218,9 +218,9 @@ class EntryWindow(QWidget):
             return
 
         # Resolve DOI and get references
-        refs = self.fModel.retrieve_refs(doi=entered_doi)
+        refs = self.fModel.retrieve_only_refs(doi=entered_doi)
 
-        if len(refs) == 0:
+        if refs is None or len(refs) == 0:
             _send_msg('No references found.')
             return
 
@@ -319,6 +319,24 @@ class EntryWindow(QWidget):
     def follow_refs_forward(self):
         doi = self.doc_selector.value
         things = db.follow_refs_forward(doi)
+
+        # First clean up existing GUI window.
+        # If there are widgets in the layout (i.e. from the last call to 'get_refs'),
+        # delete all of those reference labels before adding more.
+        _delete_all_widgets(self.ref_items_layout)
+
+        for thing in things:
+            ref_label = self.ref_to_label(thing)
+            self.ref_items_layout.insertWidget(self.ref_area_layout.count() - 1, ref_label)
+
+        # Add entry to history
+        self.doc_selector.add_to_history(doi)
+
+        self._set_response_message('Papers in your database that cite the given DOI.\n'
+                                   'List may not be exhaustive.')
+
+        # self.response_label.hide()
+        self.ref_area.show()
 
     def add_all_refs(self):
         """
@@ -431,6 +449,9 @@ class EntryWindow(QWidget):
         ref_year = ref.get('year')
         if ref_year is None:
             ref_year = ref.get('date')
+
+        if isinstance(ref_author_list, str):
+            ref_author_list = ref_author_list.split('; ')
 
         # Format short and long author lists
         if ref_author_list is not None:
@@ -619,6 +640,8 @@ class EntryWindow(QWidget):
         Sets the line of text to indicate program status.
         """
         self.response_label.setText(message)
+        self.response_label.repaint()
+        qApp.processEvents()
         self.response_label.show()
 
     def _populate_data(self, info):
@@ -1189,6 +1212,7 @@ class FunctionModel(object):
         # Pass in the instance of the EntryWindow
         self.window = window
 
+    '''
     def retrieve_refs(self, doi):
         refs = []
         try:
@@ -1196,19 +1220,29 @@ class FunctionModel(object):
             paper_info = rr.retrieve_all_info(input=doi, input_type='doi')
             refs = paper_info.references
 
-            # If the paper is in the library and has no references, try
-            # retrieving references from online (not from saved database).
-            if len(refs) == 0 and self.window.doc_selector.status in (1,2):
-                refs = rr.retrieve_references(doi=doi)
-
-                # If references are found, add them to the saved database.
-                if len(refs) > 0:
-                    for ref in refs:
-                        title = getattr(paper_info.entry, 'title', None)
-                        db.add_reference(ref, main_doi=doi, main_title=title)
-                paper_info.references = refs
-
             self.window._populate_data(paper_info)
+
+        except UnsupportedPublisherError as exc:
+            error_logging.log(method='gui.Window.get_refs', message='Unsupported Publisher', error=str(exc), doi=doi)
+            _send_msg('Unsupported Publisher')
+            return
+        except ParseException or AttributeError as exc:
+            error_logging.log(method='gui.Window.get_refs', message='Error parsing journal page', error=str(exc), doi=doi)
+            _send_msg('Error parsing journal page')
+            return
+        #except Exception as exc:
+        #    log(method='gui.Window.get_refs', error=str(exc), doi=doi)
+        #    _send_msg(str(exc))
+
+        return refs
+    '''
+
+    def retrieve_only_refs(self, doi):
+        refs = []
+        try:
+            refs = rr.retrieve_only_references(input=doi, input_type='doi')
+
+            self.window.data.references = refs
 
         except UnsupportedPublisherError as exc:
             error_logging.log(method='gui.Window.get_refs', message='Unsupported Publisher', error=str(exc), doi=doi)
@@ -1430,13 +1464,16 @@ class ReferenceLabel(QLabel):
 
         add_to_lib = menu.addAction("Add to library")
         ref_lookup = menu.addAction("Look up references")
+        ref_follow_forward = menu.addAction("Follow refs forward")
         move_to_trash = menu.addAction("Move to trash")
-        add_doi = menu.addAction("Add DOI")
+        add_doi = menu.addAction("Find DOI")
         action = menu.exec_(self.mapToGlobal(QContextMenuEvent.pos()))
         if action == add_to_lib:
             self.add_to_library_from_label(self.doi)
         elif action == ref_lookup:
             self.lookup_ref(self.doi)
+        elif action == ref_follow_forward:
+            self.follow_forward(self.doi)
         elif action == move_to_trash:
             self.move_doc_to_trash(self.doi)
         elif action == add_doi:
@@ -1531,6 +1568,23 @@ class ReferenceLabel(QLabel):
             return
         self.parent.textEntry.setText(doi)
         self.parent.get_refs()
+
+    def follow_forward(self, doi):
+        """
+        Sets the DOI of the clicked label in the text box and
+        gets the list of papers in the user's database that
+        cite the clicked label.
+
+        Parameters
+        ----------
+        doi : str
+            DOI of the clicked label
+        """
+        if doi is None:
+            _send_msg('No DOI found for this reference')
+            return
+        self.parent.textEntry.setText(doi)
+        self.parent.follow_refs_forward()
 
     def move_doc_to_trash(self, doi=None):
         """
