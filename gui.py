@@ -272,9 +272,9 @@ class EntryWindow(QWidget):
             _send_msg('Error while parsing article webpage.')
         except PDFError:
             _send_msg('PDF could not be retrieved.')
-        #except Exception as exc:
-        #    log(method='gui.Window.add_to_library_from_main', error=str(exc), doi=doi)
-        # _send_msg(str(exc))
+        except Exception as exc:
+            error_logging.log(method='gui.Window.add_to_library_from_main', error=str(exc), doi=doi)
+            _send_msg(str(exc))
 
         # Add entry to history
         self.doc_selector.add_to_history(doi)
@@ -1252,9 +1252,9 @@ class FunctionModel(object):
             error_logging.log(method='gui.Window.get_refs', message='Error parsing journal page', error=str(exc), doi=doi)
             _send_msg('Error parsing journal page')
             return
-        #except Exception as exc:
-        #    log(method='gui.Window.get_refs', error=str(exc), doi=doi)
-        #    _send_msg(str(exc))
+        except Exception as exc:
+           error_logging.log(method='gui.Window.get_refs', error=str(exc), doi=doi)
+           _send_msg(str(exc))
 
         return refs
 
