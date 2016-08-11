@@ -24,6 +24,7 @@ import error_logging
 # from shrew_errors import *
 from mendeley.errors import *
 from pypub.pypub_errors import *
+from pdfetch.pdfetch_errors import *
 
 
 class EntryWindow(QWidget):
@@ -51,8 +52,8 @@ class EntryWindow(QWidget):
      - Implement reading the abstract of any paper
 
     """
-    def __init__(self):
-        super().__init__()
+    def __init__(self, parent_tab_window=None, encapsulating_window=None):
+        super(EntryWindow, self).__init__()
 
         self.library = LibraryInterface.create('Mendeley')
 
@@ -63,12 +64,15 @@ class EntryWindow(QWidget):
         self.copy_shortcut = QShortcut(QKeySequence("Ctrl+C"), self)
         self.copy_shortcut.activated.connect(_copy_to_clipboard)
 
+        self.parent_tab_window=parent_tab_window
+        self.encapsulating_window = encapsulating_window
+
         self.initUI()
 
     def initUI(self):
 
         # Make all widgets
-        self.entryLabel = QLabel('Please enter a DOI')
+        self.entryLabel = QLabel('Please enter information')
         self.indicator = QPushButton()
         self.textEntry = QLineEdit()
         self.doi_check = QRadioButton('DOI')
@@ -167,10 +171,10 @@ class EntryWindow(QWidget):
         self.copy_shortcut.activated.connect(_copy_to_clipboard)
 
         # Sizing, centering, and showing
-        self.resize(500,700)
-        _center(self)
-        self.setWindowTitle('ScholarTools')
-        self.show()
+        # self.resize(800,700)
+        # _center(self)
+        # self.setWindowTitle('ScholarTools')
+        # self.show()
 
     # +=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+= Start of Functions
 
@@ -272,9 +276,9 @@ class EntryWindow(QWidget):
             _send_msg('Error while parsing article webpage.')
         except PDFError:
             _send_msg('PDF could not be retrieved.')
-        except Exception as exc:
-            error_logging.log(method='gui.Window.add_to_library_from_main', error=str(exc), doi=doi)
-            _send_msg(str(exc))
+        # except Exception as exc:
+        #     error_logging.log(method='gui.Window.add_to_library_from_main', error=str(exc), doi=doi)
+        #     _send_msg(str(exc))
 
         # Add entry to history
         self.doc_selector.add_to_history(doi)
@@ -404,6 +408,7 @@ class EntryWindow(QWidget):
 
                 label.expanded_text = label.expanded_text + '\n' + doi
 
+                # TODO: move database interaction out of the window class
                 if authors is not None:
                     # Update the reference entry within the database to
                     # reflect the change.
@@ -544,7 +549,13 @@ class EntryWindow(QWidget):
     # ++++++++++++++++++++++++++++++++++++++++++++
     # ============================================ Misc. Functions
     # ++++++++++++++++++++++++++++++++++++++++++++
-    
+    def focus(self):
+        if self.encapsulating_window is not None:
+            self.parent_tab_window.setCurrentWidget(self.encapsulating_window)
+        else:
+            self.parent_tab_window.setCurrentWidget(self)
+
+
     def update_document_status(self, doi=None, adding=False, popups=True, sync=True):
         """
         Updates the indicators about whether a certain paper is in the user's library.
@@ -569,8 +580,9 @@ class EntryWindow(QWidget):
             doc_json = self.library.get_document(doi, return_json=True)
         except DocNotFoundError:
             # Document was not found in library
-            if popups:
-                _send_msg('Document not found in library.\nMay not have been added.')
+            if adding:
+                if popups:
+                    _send_msg('Document not in library.')
             self.data.doc_response_json = None
             self.doc_selector.status = 0
         except Exception:
@@ -665,142 +677,588 @@ class EntryWindow(QWidget):
         self.data.expanded_ref_labels = []
 
 
-'''
-class NotesWindow(QWidget):
+class InternalSearchWindow(QWidget):
     """
-    This is the smaller window that appears displaying notes for a given reference.
+    This is the main window of the application.
+
+    --- Overview of Usage ---
+    User inputs a DOI. The indicator button to the left of the text box will
+    turn green if the DOI within the text field is in the user's library.
+    From there, the user can get the references for the paper, which will appear
+    in a large box below the buttons, or the user can open up the notes editor,
+    which appears in a smaller, new window. The notes can be edited and saved.
 
     --- Features ---
-    * Text box: Displays the current notes saved for a given document, and allows
-       for editing.
-    * Save button: Saves the changes made to the notes, and syncs with Mendeley.
-    * Save and Close button: Saves the changes made to the notes, syncs, with
-       Mendeley, and closes the notes window.
-    * Prompting before exit: If the user attempts to close the window after
-       making unsaved changes to the notes, a pop-up window appears asking
-       to confirm the action without saving. Provides an option to save.
+    * Indicator button next to the text field turns green if the entered DOI
+       is found in the user's library. This is done automatically.
+    * Get References button creates a list of the references for the paper
+       entered in the text box. See "ReferenceLabel" for more information.
+    * Open Notes button opens a new window with the Mendeley notes about
+       the paper. These can be edited and saved.
 
     TODOs:
-     - Fix the prompt before exit (currently appears when closing the main
-        window, even after the notes window is gone. Maybe this has to do
-        with having closed the window but not terminating the widget process?)
-     - Add informative window title to keep track of which paper is being
-        commented on.
-     - Add (automatic or voluntary) feature to input a little note saying something
-        like "edited with reference to [original file that references this one]"
+     - Implement URL input capability, not just DOI
+     - Possibly make the window tabbed with expanded functionality?
+     - Implement reading the abstract of any paper
 
     """
-    def __init__(self, parent=None, notes=None, doc_json=None):
-        super(NotesWindow, self).__init__()
-        self.parent = parent
-        self.notes = notes
-        self.doi = None
-        self.doc_id = None
-        self.caption = None
+    def __init__(self, parent_tab_window=None, sibling_window=None):
+        super(InternalSearchWindow, self).__init__()
 
-        if doc_json is not None:
-            self.doi = doc_json.get('doi')
-            self.doc_id = doc_json.get('id')
-            self.make_captions(doc_json)
+        self.library = LibraryInterface.create('Mendeley')
 
-        self.initUI()
-
-    def initUI(self):
-        # Make widgets
-        self.notes_title = QLabel('Notes:')
-        self.notes_box = QTextEdit()
-        self.save_button = QPushButton('Save')
-        self.save_and_close_button = QPushButton('Save and Close')
-        self.saved_indicator = QLabel('Saved!')
-        self.saved_indicator.hide()
-
-        # Connect widgets
-        self.save_button.clicked.connect(self.save)
-        self.save_and_close_button.clicked.connect(self.save_and_close)
-        self.notes_box.textChanged.connect(self.updated_text)
-
-        if self.notes is not None:
-            self.notes_box.setText(self.notes)
-
-        self.saved = True
-
-        hbox = QHBoxLayout()
-        hbox.addWidget(self.save_button)
-        hbox.addWidget(self.save_and_close_button)
-
-        # Make layout and add widgets
-        vbox = QVBoxLayout()
-        vbox.addWidget(self.notes_title)
-        vbox.addWidget(self.notes_box)
-        vbox.addWidget(self.saved_indicator)
-        vbox.addStretch(1)
-
-        vbox.addLayout(hbox)
-
-        self.setLayout(vbox)
-
-        # Connect keyboard shortcut
-        self.close_shortcut = QShortcut(QKeySequence("Ctrl+W"), self)
-        self.close_shortcut.activated.connect(self.close)
+        self.fModel = FunctionModel(self)
+        self.data = Data()
 
         # Connect copy to clipboard shortcut
         self.copy_shortcut = QShortcut(QKeySequence("Ctrl+C"), self)
         self.copy_shortcut.activated.connect(_copy_to_clipboard)
 
-        self.setWindowTitle(self.caption)
-        self.show()
+        self.parent_tab_window = parent_tab_window
+        self.sibling_window = sibling_window
+        self.main_window = self.sibling_window.centralWidget()
 
-    def make_captions(self, doc_json):
-        # Make a useful window title
-        doc_title = doc_json.get('title')
-        doc_year = doc_json.get('year')
-        doc_authors = doc_json.get('authors')
-        if doc_authors is not None:
-            lastnames = [a.get('last_name') for a in doc_authors]
-            first_authors = lastnames[0:2]
-            first_authors = ', '.join(first_authors)
-            if len(lastnames) > 2:
-                first_authors = first_authors + ', et al.'
-        else:
-            first_authors = ''
+        self.initUI()
 
-        self.caption = ''
+    def initUI(self):
 
-        if doc_year is not None and doc_authors is not None:
-            self.caption = first_authors + ' (' + str(doc_year) + ')'
-        elif doc_title is not None:
-            self.caption = doc_title
-        else:
-            self.caption = self.doi
+        # Make all widgets
+        self.entryLabel = QLabel('Please enter search information')
+
+        self.title_box = QLineEdit()
+        self.author_box = QLineEdit()
+        self.publication_box = QLineEdit()
+        self.year_box = QLineEdit()
+        self.doi_box = QLineEdit()
+        self.pmid_box = QLineEdit()
+
+        self.title_box.setPlaceholderText('Title')
+        self.author_box.setPlaceholderText('Author(s)')
+        self.publication_box.setPlaceholderText('Publication')
+        self.year_box.setPlaceholderText('Year')
+        self.doi_box.setPlaceholderText('DOI')
+        self.pmid_box.setPlaceholderText('PMID')
+
+        self.indicator = QPushButton()
+        self.refresh = QPushButton('Sync with Library')
+        self.trash = QPushButton('Move to Trash')
+        self.search_in_lib = QPushButton('Search in Library')
+        self.history = QComboBox()
+        self.response_label = QLabel()
+        self.ref_area = QScrollArea()
+
+        # Set connections to functions
+        self.title_box.returnPressed.connect(self.search)
+        self.author_box.returnPressed.connect(self.search)
+        self.publication_box.returnPressed.connect(self.search)
+        self.year_box.returnPressed.connect(self.search)
+        self.doi_box.returnPressed.connect(self.search)
+        self.pmid_box.returnPressed.connect(self.search)
+
+        self.refresh.clicked.connect(self.fModel.resync)
+        self.trash.clicked.connect(self.move_to_trash)
+        self.search_in_lib.clicked.connect(self.search)
 
 
-    def save(self):
-        updated_notes = self.notes_box.toPlainText()
-        notes_dict = {"notes" : updated_notes}
-        self.parent.api.documents.update(self.doc_id, notes_dict)
-        self.parent.library.sync()
-        self.saved = True
+        # Make scroll items widget
+        self.ref_items = QWidget()
+        items_layout = QVBoxLayout()
+        items_layout.addStretch(1)
+        self.ref_items.setLayout(items_layout)
+        self.ref_items_layout = self.ref_items.layout()
 
-    def save_and_close(self):
-        self.save()
-        self.close()
+        # Format scrollable reference area
+        self.ref_area.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
+        self.ref_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.ref_area.setWidgetResizable(True)
+        ref_layout = QVBoxLayout()
+        self.ref_area.setLayout(ref_layout)
+        self.ref_area_layout = self.ref_area.layout()
+        self.ref_area.setWidget(self.ref_items)
+        self.ref_area.hide()
 
-    def updated_text(self):
-        self.saved = False
+        text_area_top = QHBoxLayout()
+        text_area_top.addWidget(self.title_box)
+        text_area_top.addWidget(self.author_box)
 
-    def closeEvent(self, QCloseEvent):
-        if self.saved:
-            QCloseEvent.accept()
+        text_area_bottom = QHBoxLayout()
+        text_area_bottom.addWidget(self.publication_box)
+        text_area_bottom.addWidget(self.year_box)
+        text_area_bottom.addWidget(self.doi_box)
+        text_area_bottom.addWidget(self.pmid_box)
+
+        # Create a horizontal box to be added to vbox later
+        # The radiobuttons having the same parent widget ensures
+        # that they are part of a group and only one can be checked.
+        checkboxes = QHBoxLayout()
+        checkboxes.addWidget(self.refresh)
+        checkboxes.addWidget(self.trash)
+        checkboxes.addWidget(self.history)
+        checkboxes.addWidget(self.search_in_lib)
+        checkboxes.addStretch(1)
+
+        # Create a vertical box layout.
+        # Populate with widgets and add stretch space at the bottom.
+        self.vbox = QVBoxLayout()
+        self.vbox.addWidget(self.entryLabel)
+
+        # Create a horizontal box for indicator and textEntry
+        # self.doc_selector = DocSelector(window=self)
+        # ds_view = self.doc_selector.text_view
+        # textline = ds_view.create_text_layout(textEntry=self.textEntry, indicator=self.indicator)
+
+        self.vbox.addLayout(text_area_top)
+        self.vbox.addLayout(text_area_bottom)
+        self.vbox.addLayout(checkboxes)
+        self.vbox.addWidget(self.response_label)
+        self.vbox.addWidget(self.ref_area)
+        self.vbox.addStretch(1)
+
+        self.response_label.hide()
+
+        # Set layout to be the vertical box.
+        self.setLayout(self.vbox)
+
+        # Connect copy to clipboard shortcut
+        self.copy_shortcut = QShortcut(QKeySequence("Ctrl+C"), self)
+        self.copy_shortcut.activated.connect(_copy_to_clipboard)
+
+
+    # +=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+= Start of Functions
+
+    # ++++++++++++++++++++++++++++++++++++++++++++
+    # ============================================ Main Window Button Functions
+    # ++++++++++++++++++++++++++++++++++++++++++++
+
+    def text_changed(self):
+        doc_id = self.doc_selector.value
+        self.update_document_status(doi=doc_id, sync=False, popups=False)
+
+    def get_refs(self):
+        """
+        Gets references for paper corresponding to the DOI in text field.
+        Displays reference information in scrollable area.
+        """
+        self.response_label.hide()
+
+        # Get DOI from text field and handle blank entry
+        entered_doi = self.doc_selector.value
+
+        if entered_doi == '':
+            self._set_response_message('Please enter text above.')
             return
-        else:
-            reply = QMessageBox.question(self, 'Message', 'Notes have not been saved.\n'
-                      'Are you sure you want to close notes?', QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
 
-        if reply == QMessageBox.Yes:
-            QCloseEvent.accept()
+        # Resolve DOI and get references
+        refs = self.fModel.retrieve_only_refs(doi=entered_doi)
+
+        if refs is None or len(refs) == 0:
+            _send_msg('No references found.')
+            return
+
+        # First clean up existing GUI window.
+        # If there are widgets in the layout (i.e. from the last call to 'get_refs'),
+        # delete all of those reference labels before adding more.
+        _delete_all_widgets(self.ref_items_layout)
+
+        for ref in refs:
+            ref_label = self.ref_to_label(ref)
+            self.ref_items_layout.insertWidget(self.ref_area_layout.count() - 1, ref_label)
+
+        # Add entry to history
+        self.doc_selector.add_to_history(entered_doi)
+
+        self.response_label.hide()
+        self.ref_area.show()
+
+    #
+    # For "Open Notes", see "Notes Box Display Functions" section below.
+    #
+
+    def add_to_library_from_main(self):
+        """
+        Adds paper corresponding to the DOI in the text field to the user library,
+        if it is not already there.
+        """
+        if self.doc_selector.status in (1,2):
+            _send_msg('Paper is already in library.')
+            return
+
+        doi = self.doc_selector.value
+        if doi is None or doi == '':
+            self._set_response_message('Please enter text above.')
+            return
+
+        try:
+            self.library.add_to_library(doi)
+        except UnsupportedPublisherError as exc:
+            error_logging.log(method='gui.Window.add_to_library_from_main', message='Unsupported publisher', error=str(exc), doi=doi)
+            _send_msg('Publisher is not yet supported.\nDocument not added.')
+            return
+        except CallFailedException as call:
+            error_logging.log(method='gui.Window.add_to_library_from_main', message='Call failed', error=str(call), doi=doi)
+            _send_msg(str(call))
+        except ParseException or AttributeError as exc:
+            error_logging.log(method='gui.Window.add_to_library_from_main', message='Error while parsing article webpage',
+                error=str(exc), doi=doi)
+            _send_msg('Error while parsing article webpage.')
+        except PDFError:
+            _send_msg('PDF could not be retrieved.')
+        # except Exception as exc:
+        #     error_logging.log(method='gui.Window.add_to_library_from_main', error=str(exc), doi=doi)
+        #     _send_msg(str(exc))
+
+        # Add entry to history
+        self.doc_selector.add_to_history(doi)
+
+        self.update_document_status(doi, adding=True)
+
+    def move_to_trash(self, doi=None):
+        """
+        Moves a paper from the user's library to trash
+        (in Mendeley).
+
+        Parameters
+        ----------
+        doi : str
+            DOI of the paper to be deleted.
+        """
+
+        # This method can be called with doi as None or
+        # as False (which is default if connected from
+        # a GUI button) so this looks for String DOIs
+        if isinstance(doi, str):
+            entry_type = 'doi'
+            value = doi
         else:
-            QCloseEvent.ignore()
-'''
+            entry_type = self.doc_selector.entry_type
+            value = self.doc_selector.value
+
+        try:
+            self.library.trash_document(**{entry_type: value})
+        except DocNotFoundError:
+            _send_msg('Document not found in library.')
+            return
+        except UnsupportedEntryTypeError:
+            _send_msg('Only functions using DOIs are supported at this time.')
+            return
+
+        # Add entry to history
+        self.doc_selector.add_to_history(value)
+
+        self.update_document_status(doi=value)
+
+    def follow_refs_forward(self):
+        doi = self.doc_selector.value
+        things = db.follow_refs_forward(doi)
+
+        # First clean up existing GUI window.
+        # If there are widgets in the layout (i.e. from the last call to 'get_refs'),
+        # delete all of those reference labels before adding more.
+        _delete_all_widgets(self.ref_items_layout)
+
+        for thing in things:
+            ref_label = self.ref_to_label(thing)
+            self.ref_items_layout.insertWidget(self.ref_area_layout.count() - 1, ref_label)
+
+        # Add entry to history
+        self.doc_selector.add_to_history(doi)
+
+        self._set_response_message('Papers in your database that cite the given DOI.\n'
+                                   'List may not be exhaustive.')
+
+        # self.response_label.hide()
+        self.ref_area.show()
+
+    def search(self):
+        self.response_label.hide()
+
+        title_text = self.title_box.text()
+        author_text = self.author_box.text()
+        publication_text = self.publication_box.text()
+        year_text = self.year_box.text()
+        doi_text = self.doi_box.text()
+        pmid_text = self.pmid_box.text()
+
+        search_dict = {'title': title_text,
+                       'authors': author_text,
+                       'publication': publication_text,
+                       'year': year_text,
+                       'doi': doi_text,
+                       'pmid': pmid_text}
+
+        # Remove any text fields that have not been filled out
+        sd_copy = dict(search_dict)
+        for k, v in search_dict.items():
+            if v is None or v == '':
+                del sd_copy[k]
+
+        search_dict = sd_copy
+        results = db.check_multiple_constraints(search_dict)
+
+        if results is None or len(results) == 0:
+            _send_msg('No matching entries found.')
+            return
+
+        # First clean up existing GUI window.
+        # If there are widgets in the layout (i.e. from the last call to 'get_refs'),
+        # delete all of those reference labels before adding more.
+        _delete_all_widgets(self.ref_items_layout)
+
+        for result in results:
+            # ref_label = self.ref_to_label(result)
+            ref_label = self.main_window.ref_to_label(result)
+            self.ref_items_layout.insertWidget(self.ref_area_layout.count() - 1, ref_label)
+
+        self.response_label.hide()
+        self.ref_area.show()
+
+
+    # ++++++++++++++++++++++++++++++++++++++++++++
+    # ============================================ Reference Label Functions
+    # ++++++++++++++++++++++++++++++++++++++++++++
+    def ref_to_label(self, ref):
+        """
+        Creates a ReferenceLabel object from a single paper reference.
+        Formats title, author information for display, connects functionality
+        to the label object.
+        Used by get_refs().
+
+        Parameters
+        ----------
+        ref: dict
+            Contains information from a single paper reference.
+
+        Returns
+        -------
+        ref_label: ReferenceLabel
+            For display in reference box.
+        """
+        # Extract main display info
+        ref_id = ref.get('ref_id')
+        ref_title = ref.get('title')
+        ref_author_list = ref.get('authors')
+        ref_doi = ref.get('doi')
+        ref_year = ref.get('year')
+        if ref_year is None:
+            ref_year = ref.get('date')
+
+        if isinstance(ref_author_list, str):
+            ref_author_list = ref_author_list.split('; ')
+
+        # Format short and long author lists
+        if ref_author_list is not None:
+            ref_full_authors = '; '.join(ref_author_list)
+            if len(ref_author_list) > 2:
+                ref_first_authors = ref_author_list[0] + ', ' + ref_author_list[1] + ', et al.'
+            else:
+                ref_first_authors = ref_full_authors
+        else:
+            ref_first_authors = ''
+            ref_full_authors = ''
+
+        # Initialize indicator about whether reference is in library
+        in_lib = 3
+
+        # Build up strings with existing info
+        # Small text is for abbreviated preview.
+        # Expanded text is additional information for the larger
+        # reference view when a label is clicked.
+        ref_small_text = ''
+        ref_expanded_text = ''
+        if ref_id is not None:
+            ref_small_text = ref_small_text + str(ref_id) + '. '
+            ref_expanded_text = ref_expanded_text + str(ref_id) + '. '
+        if ref_author_list is not None:
+            ref_small_text = ref_small_text + ref_first_authors
+            ref_expanded_text = ref_expanded_text + ref_full_authors
+        if ref.get('publication') is not None:
+            ref_expanded_text = ref_expanded_text + '\n' + ref.get('publication')
+        if ref_year is not None:
+            ref_small_text = ref_small_text + ', ' + ref_year
+            ref_expanded_text = ref_expanded_text + ', ' + ref_year
+        if ref_title is not None:
+            ref_small_text = ref_small_text + ', ' + ref_title
+            ref_expanded_text = ref_expanded_text + '\n' + ref_title
+        if ref_doi is not None:
+            ref_expanded_text = ref_expanded_text + '\n' + ref_doi
+            try:
+                doc_json = self.library.get_document(ref_doi, return_json=True)
+                has_file = doc_json.get('file_attached')
+                if has_file:
+                    in_lib = 2
+                else:
+                    in_lib = 1
+            except Exception:
+                in_lib = 0
+
+        # Cut off length of small text to fit within window
+        ref_small_text = td(ref_small_text, 66)
+
+        # Make ReferenceLabel object and set attributes
+        ref_label = ReferenceLabel(ref_small_text, self)
+        ref_label.small_text = ref_small_text
+        ref_label.expanded_text = ref_expanded_text
+        ref_label.reference = ref
+        ref_label.doi = ref.get('doi')
+        ref_label.view.status = in_lib
+
+        # Append all labels to reference text lists in in Data()
+        self.data.small_ref_labels.append(ref_small_text)
+        self.data.expanded_ref_labels.append(ref_expanded_text)
+
+        return ref_label
+
+
+    # ++++++++++++++++++++++++++++++++++++++++++++
+    # ============================================ Notes Box Display Functions
+    # ++++++++++++++++++++++++++++++++++++++++++++
+    def show_main_notes_box(self):
+        """
+        Displays the notes/info window for the paper from the DOI in
+        the main text box.
+        """
+        # Paper must be in the library to display the window
+        if self.doc_selector.status == 0:
+            _send_msg('Document not found in library.')
+            return
+        doc_json = self.data.doc_response_json
+        if doc_json is None:
+            raise LookupError('Main document JSON not found')
+        notes = doc_json.get('notes')
+
+        # Add entry to history
+        self.doc_selector.add_to_history(self.doc_selector.value)
+
+        self.tnw = TabbedNotesWindow(parent=self, notes=notes, doc_json=doc_json)
+        self.tnw.show()
+
+
+    # ++++++++++++++++++++++++++++++++++++++++++++
+    # ============================================ Misc. Functions
+    # ++++++++++++++++++++++++++++++++++++++++++++
+    def focus(self):
+        if self.sibling_window is not None:
+            self.parent_tab_window.setCurrentWidget(self.sibling_window)
+
+    def update_document_status(self, doi=None, adding=False, popups=True, sync=True):
+        """
+        Updates the indicators about whether a certain paper is in the user's library.
+        Change color of indicator.
+
+        Parameters
+        ----------
+        doi : str
+            DOI of the paper to check for.
+        adding : bool
+            Indicates whether a paper is being added or deleted.
+        """
+        if sync:
+            self.library.sync()
+
+        if doi is None:
+            doi = self.doc_selector.value
+            if doi is None:
+                return
+
+        try:
+            doc_json = self.library.get_document(doi, return_json=True)
+        except DocNotFoundError:
+            # Document was not found in library
+            if adding:
+                if popups:
+                    _send_msg('Document not in library.')
+            self.data.doc_response_json = None
+            self.doc_selector.status = 0
+        except Exception:
+            if adding:
+                if popups:
+                    _send_msg('An error occurred during sync.\nDocument may not have been added.')
+            self.data.doc_response_json = None
+            self.doc_selector.status = 0
+        else:
+            has_file = doc_json.get('file_attached')
+            if has_file is not None:
+                # If no file is found, there may have been an error.
+                # Give users the ability to delete the document that was added without file.
+                if not has_file:
+                    msgBox = QMessageBox()
+                    msgBox.setText('Document was added without a file attached.\n'
+                                   'If this was in error, you may choose to delete\n'
+                                   'the file and add again. Otherwise, ignore this message.')
+                    delete_button = QPushButton('Delete')
+                    msgBox.addButton(delete_button, QMessageBox.RejectRole)
+                    delete_button.clicked.connect(lambda: self.move_to_trash(doi=doi))
+                    msgBox.addButton(QPushButton('Ignore'), QMessageBox.AcceptRole)
+
+                    reply = msgBox.exec_()
+
+                    # If the user chose to ignore, exit this function.
+                    if reply != QMessageBox.Accepted:
+                        # 1 = document in library without attached file
+                        self.data.doc_response_json = doc_json
+                        self.doc_selector.status = 1
+                        return
+                else:
+                    # 2 = document in library with attached file
+                    self.data.doc_response_json = doc_json
+                    self.doc_selector.status = 2
+
+
+    # ++++++++++++++++++++++++++++++++++++++++++++
+    # ============================================ Internal Functions
+    # ++++++++++++++++++++++++++++++++++++++++++++
+    def _check_lib(self, doi=None):
+        """
+        Checks library for a DOI, returns true if found.
+
+        Parameters
+        ----------
+        doi : str
+            DOI of the paper to look up.
+
+        Returns
+        -------
+        in_library: bool
+            True if DOI is found in the user's library.
+            False otherwise.
+        """
+        if doi is None:
+            entered_doi = self.doc_selector.value
+        else: entered_doi = doi
+
+        if entered_doi == '':
+            return False
+        in_library = self.library.check_for_document(entered_doi)
+        return in_library
+
+    def _set_response_message(self, message):
+        """
+        Sets the line of text to indicate program status.
+        """
+        self.response_label.setText(message)
+        self.response_label.repaint()
+        qApp.processEvents()
+        self.response_label.show()
+
+    def _populate_data(self, info):
+        """
+        Sets attributes of Data object with information about the paper
+        being searched for in the main text box.
+
+        Parameters
+        ----------
+        info : PaperInfo object
+            See pypub.paper_info
+            Holds information about a paper.
+        """
+        self.data.entry = info.entry
+        self.data.references = info.references
+        self.data.doi = info.doi
+        self.data.scraper_obj = info.scraper_obj
+        self.data.pdf_link = info.pdf_link
+        self.data.url = info.url
+        self.data.small_ref_labels = []
+        self.data.expanded_ref_labels = []
 
 
 class TabbedNotesWindow(QTabWidget):
@@ -1022,7 +1480,8 @@ class TabbedNotesWindow(QTabWidget):
         self.parent.library.sync()
 
         # Update local version of notes to updated version and indicate saved
-        self.parent.data.doc_response_json['notes'] = updated_notes
+        if self.label is None:
+            self.parent.data.doc_response_json['notes'] = updated_notes
         self.saved = True
 
         # Change label to indicate saved
@@ -1194,13 +1653,197 @@ class DocSelector(object):
         return self._status
 
     @status.setter
-    def status(self,value):
+    def status(self, value):
         # This method can be called by the window when:
         # 1) Processing the current information to "load" a document
         # 2) Upon deleting a document
         # 3) Upon syncing
 
         self._status = value
+
+        # Update main paper entry to reflect presence of attached file
+        if self.entry_type == 'doi':
+            if value == 0:
+                has_file = 0
+                in_lib = 0
+            elif value == 1:
+                has_file = 0
+                in_lib = 1
+            elif value == 2:
+                has_file = 1
+                in_lib = 1
+            else:
+                has_file = None
+                in_lib = None
+
+            db.update_entry_field(identifying_value=self.value, updating_field=['has_file', 'in_lib'],
+                                  updating_value=[has_file, in_lib], filter_by_doi=True)
+
+        self.text_view.status = value  # This should call a setter method that redraws accordingly
+
+    def add_to_history(self, entry):
+        self.text_view.add_to_history(entry)
+
+
+class SearchSelectorView(object):
+
+    # - text entry
+    # - type selectors
+
+    def __init__(self, window):
+        self.window = window
+        self._status = 0
+
+        self.indicator = self.window.indicator
+        self.textEntry = self.window.textEntry
+        self.history = self.window.history
+
+        self.history.activated[str].connect(self.set_history_text)
+        self.history.setInsertPolicy = QComboBox.InsertAtTop
+
+    @property
+    def status(self):
+        return self._status
+
+    @status.setter
+    def status(self,value):
+        # Document is found in the library with file attached
+        if value == 2:
+            self.indicator.setStyleSheet("""QPushButton {
+                                                background-color: rgba(0,255,0,0.25); }""")
+            self._status = 2
+
+        elif value == 1:
+            self.window.indicator.setStyleSheet("""QPushButton {
+                                                background-color: rgba(255,165,0,0.25); }""")
+            self._status = 1
+        elif value == 0:
+            self.window.indicator.setStyleSheet("""QPushButton {
+                                            background-color: rgba(255, 0, 0, 0.25); }""")
+        else:
+            raise ValueError('Invalid ')
+
+    def create_text_layout(self, textEntry, indicator):
+        #   TODO: Also handle initialization of callbacks
+        indicator.setStyleSheet("""QPushButton {
+                                       background-color: rgba(0,0,0,0.25);
+                                       }""")
+        indicator.setAutoFillBackground(True)
+        indicator.setFixedSize(20,20)
+        indicator.setToolTip("Green: doc DOI in library.\n"
+                             "Yellow: doc missing file.\n"
+                             "Red: no doc with DOI found.")
+
+        textline = QHBoxLayout()
+        textline.addWidget(indicator)
+        textline.addWidget(textEntry)
+        return textline
+
+    def set_history_text(self, historical_entry):
+        self.textEntry.setText(historical_entry)
+
+    def add_to_history(self, entry):
+        num_items = self.history.count()
+
+        # Make sure the same item isn't added twice in a row
+        if self.history.itemText(0) == entry:
+            return
+
+        if num_items > 20:
+            self.history.removeItem(num_items-1)
+            # self.history.addItem(entry)
+            self.history.insertItem(0, entry)
+            self.history.setCurrentIndex(0)
+        else:
+            # self.history.addItem(entry)
+            self.history.insertItem(0, entry)
+            self.history.setCurrentIndex(0)
+
+
+class SearchSelector(object):
+
+    """
+
+    New layout:
+    -----------
+    view_callback => main_window.view_changed
+
+    #method in "window"
+    def view_changed(self):
+        type = self.doc_selector.type
+        value = self.doc_selector.value
+
+        if type == 'doi'
+            response = self.library.check_document_status(doi=value)
+
+        self.doc_selector.status = response.status
+
+        if response.status > 0
+          #Then update the references
+
+
+    self.library.sync
+    self.doc_selector.status = 0
+
+    """
+
+    def __init__(self, window):
+        self.window = window
+        self.text_view = DocSelectorView(self.window)
+
+        # Set int to keep track of if a DOI is in the library
+        # 0 --> DOI is not found in library (indicator red)
+        # 1 --> DOI is found, but there is no file (indicator orange)
+        # 2 --> DOI is found, with file attached (indicator green)
+        self._status = 0
+
+    @property
+    def value(self):
+        text = self.window.textEntry.text()
+        text = text.strip()
+        return text
+
+    # TODO: implement this
+    @property
+    def has_entry(self):
+        return False
+
+    # TODO: implement this
+    @property
+    def has_attached_file(self):
+        return False
+
+    @property
+    def status(self):
+        return self._status
+
+    @status.setter
+    def status(self, value):
+        # This method can be called by the window when:
+        # 1) Processing the current information to "load" a document
+        # 2) Upon deleting a document
+        # 3) Upon syncing
+
+        self._status = value
+
+        # Update main paper entry to reflect presence of attached file
+        if self.entry_type == 'doi':
+            if value == 0:
+                has_file = 0
+                in_lib = 0
+            elif value == 1:
+                has_file = 0
+                in_lib = 1
+            elif value == 2:
+                has_file = 1
+                in_lib = 1
+            else:
+                has_file = None
+                in_lib = None
+
+            db.update_entry_field(identifying_value=self.value, updating_field=['has_file', 'in_lib'],
+                                  updating_value=[has_file, in_lib], filter_by_doi=True)
+
         self.text_view.status = value  # This should call a setter method that redraws accordingly
 
     def add_to_history(self, entry):
@@ -1252,9 +1895,9 @@ class FunctionModel(object):
             error_logging.log(method='gui.Window.get_refs', message='Error parsing journal page', error=str(exc), doi=doi)
             _send_msg('Error parsing journal page')
             return
-        except Exception as exc:
-           error_logging.log(method='gui.Window.get_refs', error=str(exc), doi=doi)
-           _send_msg(str(exc))
+        # except Exception as exc:
+        #    error_logging.log(method='gui.Window.get_refs', error=str(exc), doi=doi)
+        #    _send_msg(str(exc))
 
         return refs
 
@@ -1390,7 +2033,7 @@ class ReferenceLabel(QLabel):
         self.tnw = TabbedNotesWindow(parent=self.parent, notes=notes, doc_json=doc_response_json, label=self)
         self.tnw.show()
 
-    def update_status(self, adding=False, popups=True, sync=True):
+    def update_status(self, doi=None, adding=False, popups=True, sync=True):
         """
         Updates the indicators about whether a certain paper is in the user's library.
         If from a reference label, change color of that label.
@@ -1405,6 +2048,25 @@ class ReferenceLabel(QLabel):
         if sync:
             self.parent.library.sync()
 
+        # A DOI is supplied to this function if it is being added to the label.
+        if doi is not None:
+            adding_doi = doi
+            if self.doi is None:
+                self.doi = adding_doi
+            else:
+                if self.doi != adding_doi:
+                    msgBox = QMessageBox()
+                    msgBox.setText('The current DOI, %s, for the document with title %s is trying to be '
+                                   'replaced by the DOI %s. Is this correct?')
+                    msgBox.addButton(QMessageBox.YesButton)
+                    msgBox.addButton(QMessageBox.NoButton)
+
+                    reply = msgBox.exec_()
+
+                    # If the user chose yes, overwrite current DOI with new DOI.
+                    if reply == QMessageBox.Accepted:
+                        self.doi = adding_doi
+
         doi = self.doi
         if doi is None:
             return
@@ -1414,13 +2076,13 @@ class ReferenceLabel(QLabel):
         except DocNotFoundError:
             # Document was not found in library
             if popups:
-                _send_msg('Document not found in library.\nMay not have been added.')
-            self.view.status = 0
+                _send_msg('Document not in library.')
+            self.status = 0
         except Exception:
             if adding:
                 if popups:
                     _send_msg('An error occurred during sync.\nDocument may not have been added.')
-            self.view.status = 0
+            self.status = 0
         else:
             has_file = doc_json.get('file_attached')
             if adding:
@@ -1445,18 +2107,39 @@ class ReferenceLabel(QLabel):
 
             if has_file is not None:
                 if has_file:
-                    self.view.status = 2
+                    self.status = 2
                 else:
-                    self.view.status = 1
+                    self.status = 1
             else:
-                self.view.status = 2
+                self.status = 2
 
     @property
+    def status(self):
+        return self.view.status
+
+    @status.setter
     def status(self, value):
         if value is not None:
             self.view.status = value
+            if value == 0:
+                has_file = 0
+                in_lib = 0
+            elif value == 1:
+                has_file = 0
+                in_lib = 1
+            elif value == 2:
+                has_file = 1
+                in_lib = 1
+            else:
+                has_file = None
+                in_lib = None
         else:
-            return self.view.status
+            has_file = None
+            in_lib = None
+
+        if self.doi is not None:
+            db.update_entry_field(identifying_value=self.doi, updating_field=['has_file', 'in_lib'],
+                                  updating_value=[has_file, in_lib], filter_by_doi=True)
 
     def contextMenuEvent(self, QContextMenuEvent):
         menu = QMenu(self)
@@ -1517,6 +2200,7 @@ class ReferenceLabel(QLabel):
                     _send_msg('Paper is already in library.')
                 return
 
+        self.parent.focus()
 
         # Try to add, have separate windows for each possible error
         try:
@@ -1567,6 +2251,7 @@ class ReferenceLabel(QLabel):
             _send_msg('No DOI found for this reference')
             return
         self.parent.textEntry.setText(doi)
+        self.parent.focus()
         self.parent.get_refs()
 
     def follow_forward(self, doi):
@@ -1584,6 +2269,7 @@ class ReferenceLabel(QLabel):
             _send_msg('No DOI found for this reference')
             return
         self.parent.textEntry.setText(doi)
+        self.parent.focus()
         self.parent.follow_refs_forward()
 
     def move_doc_to_trash(self, doi=None):
@@ -1885,8 +2571,34 @@ if __name__ == '__main__':
 
     app = QApplication(sys.argv)
 
+    main_window = QTabWidget()
+
+    tab1 = QMainWindow()
+    tab1.setCentralWidget(EntryWindow(parent_tab_window=main_window, encapsulating_window=tab1))
+    menubar = tab1.menuBar()
+    test_menu = menubar.addMenu("hello world")
+
+    main_window.addTab(tab1, "Main")
+    main_window.resize(800,700)
+    _center(main_window)
+    main_window.setWindowTitle('ScholarTools')
+
+    second_tab = InternalSearchWindow(parent_tab_window=main_window, sibling_window=tab1)
+    main_window.addTab(second_tab, "Library Search")
+
+    # tab_bar = main_window.tabBar()
+    # menu = QMenu()
+    # menu.addAction("Hello")
+    # menu.addAction("World")
+    # menuButton = QToolButton()
+    # menuButton.setArrowType(Qt.DownArrow)
+    # menuButton.setMenu(menu)
+    # tab_bar.setTabButton(0, QTabBar.RightSide, menuButton)
+
+    main_window.show()
+
     # loading = LoadingPopUp()
-    entryWindow = EntryWindow()
-    #loading.close()
+    # entryWindow = EntryWindow()
+    # loading.close()
 
     sys.exit(app.exec_())
