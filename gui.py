@@ -1,13 +1,15 @@
 # Standard
 import sys
+import os
+import inspect
+import subprocess
 
 # Third-party
 from PyQt5.QtWidgets import *
 from PyQt5.QtCore import *
 from PyQt5.QtGui import *
 
-# Local
-
+# Local imports
 from mendeley import client_library
 from mendeley.api import API
 from mendeley import db_interface as db
@@ -513,7 +515,7 @@ class EntryWindow(QWidget):
         ref_label.expanded_text = ref_expanded_text
         ref_label.reference = ref
         ref_label.doi = ref.get('doi')
-        ref_label.view.status = in_lib
+        ref_label.status = in_lib
 
         # Append all labels to reference text lists in in Data()
         self.data.small_ref_labels.append(ref_small_text)
@@ -679,8 +681,6 @@ class EntryWindow(QWidget):
 
 class InternalSearchWindow(QWidget):
     """
-    This is the main window of the application.
-
     --- Overview of Usage ---
     User inputs a DOI. The indicator button to the left of the text box will
     turn green if the DOI within the text field is in the user's library.
@@ -1007,106 +1007,10 @@ class InternalSearchWindow(QWidget):
         for result in results:
             # ref_label = self.ref_to_label(result)
             ref_label = self.main_window.ref_to_label(result)
-            self.ref_items_layout.insertWidget(self.ref_area_layout.count() - 1, ref_label)
+            self.ref_items_layout.insertWidget(0, ref_label)
 
         self.response_label.hide()
         self.ref_area.show()
-
-
-    # ++++++++++++++++++++++++++++++++++++++++++++
-    # ============================================ Reference Label Functions
-    # ++++++++++++++++++++++++++++++++++++++++++++
-    def ref_to_label(self, ref):
-        """
-        Creates a ReferenceLabel object from a single paper reference.
-        Formats title, author information for display, connects functionality
-        to the label object.
-        Used by get_refs().
-
-        Parameters
-        ----------
-        ref: dict
-            Contains information from a single paper reference.
-
-        Returns
-        -------
-        ref_label: ReferenceLabel
-            For display in reference box.
-        """
-        # Extract main display info
-        ref_id = ref.get('ref_id')
-        ref_title = ref.get('title')
-        ref_author_list = ref.get('authors')
-        ref_doi = ref.get('doi')
-        ref_year = ref.get('year')
-        if ref_year is None:
-            ref_year = ref.get('date')
-
-        if isinstance(ref_author_list, str):
-            ref_author_list = ref_author_list.split('; ')
-
-        # Format short and long author lists
-        if ref_author_list is not None:
-            ref_full_authors = '; '.join(ref_author_list)
-            if len(ref_author_list) > 2:
-                ref_first_authors = ref_author_list[0] + ', ' + ref_author_list[1] + ', et al.'
-            else:
-                ref_first_authors = ref_full_authors
-        else:
-            ref_first_authors = ''
-            ref_full_authors = ''
-
-        # Initialize indicator about whether reference is in library
-        in_lib = 3
-
-        # Build up strings with existing info
-        # Small text is for abbreviated preview.
-        # Expanded text is additional information for the larger
-        # reference view when a label is clicked.
-        ref_small_text = ''
-        ref_expanded_text = ''
-        if ref_id is not None:
-            ref_small_text = ref_small_text + str(ref_id) + '. '
-            ref_expanded_text = ref_expanded_text + str(ref_id) + '. '
-        if ref_author_list is not None:
-            ref_small_text = ref_small_text + ref_first_authors
-            ref_expanded_text = ref_expanded_text + ref_full_authors
-        if ref.get('publication') is not None:
-            ref_expanded_text = ref_expanded_text + '\n' + ref.get('publication')
-        if ref_year is not None:
-            ref_small_text = ref_small_text + ', ' + ref_year
-            ref_expanded_text = ref_expanded_text + ', ' + ref_year
-        if ref_title is not None:
-            ref_small_text = ref_small_text + ', ' + ref_title
-            ref_expanded_text = ref_expanded_text + '\n' + ref_title
-        if ref_doi is not None:
-            ref_expanded_text = ref_expanded_text + '\n' + ref_doi
-            try:
-                doc_json = self.library.get_document(ref_doi, return_json=True)
-                has_file = doc_json.get('file_attached')
-                if has_file:
-                    in_lib = 2
-                else:
-                    in_lib = 1
-            except Exception:
-                in_lib = 0
-
-        # Cut off length of small text to fit within window
-        ref_small_text = td(ref_small_text, 66)
-
-        # Make ReferenceLabel object and set attributes
-        ref_label = ReferenceLabel(ref_small_text, self)
-        ref_label.small_text = ref_small_text
-        ref_label.expanded_text = ref_expanded_text
-        ref_label.reference = ref
-        ref_label.doi = ref.get('doi')
-        ref_label.view.status = in_lib
-
-        # Append all labels to reference text lists in in Data()
-        self.data.small_ref_labels.append(ref_small_text)
-        self.data.expanded_ref_labels.append(ref_expanded_text)
-
-        return ref_label
 
 
     # ++++++++++++++++++++++++++++++++++++++++++++
@@ -2150,6 +2054,8 @@ class ReferenceLabel(QLabel):
         ref_follow_forward = menu.addAction("Follow refs forward")
         move_to_trash = menu.addAction("Move to trash")
         add_doi = menu.addAction("Find DOI")
+        ref_entry = menu.addAction("Manual Reference Entry")
+
         action = menu.exec_(self.mapToGlobal(QContextMenuEvent.pos()))
         if action == add_to_lib:
             self.add_to_library_from_label(self.doi)
@@ -2161,6 +2067,8 @@ class ReferenceLabel(QLabel):
             self.move_doc_to_trash(self.doi)
         elif action == add_doi:
             self.add_doi()
+        elif action == ref_entry:
+            self.ref_entry()
 
     # ++++++++++++++++++++++++++++++++++++++++++++
     # ============================================ Reference Label Right-Click Functions
@@ -2336,6 +2244,45 @@ class ReferenceLabel(QLabel):
                                     updating_value=[doi, title], filter_by_title=True)
         self.update_status(doi=doi, popups=False)
 
+    def ref_entry(self):
+        print(self.status)
+        if self.status != 2:
+            _send_msg('Paper must be in library and have an attached PDF for manual reference entry.')
+            return
+
+        doc = self.parent.library.get_document(doi=self.doi, return_json=True)
+        doc_id = doc.get('id')
+
+        # First get the content and name of the attached pdf
+        try:
+            file_content, _, file_id = self.parent.library.get_file_content_from_doc_id(doc_id=doc_id)
+        except Exception as exc:
+            _send_msg('File retrieval from Mendeley failed.')
+            return
+
+        # Get the directory of the current running script to use for temp storage
+        package_path = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))
+        temp_filename = os.path.join(package_path, 'temp.pdf')
+
+        # with open(temp_filename, 'wb') as temp_file:
+        #     temp_file.write(file_content)
+
+        ref_window = ReferenceEntryWindow(main_paper_doi=self.doi)
+        # ref_window.show()
+
+        # self._open_file(filename=temp_filename)
+
+    def _open_file(self, filename):
+        # Platform-independent file opening calls
+        if sys.platform == 'win32':
+            os.startfile(filename)
+        else:
+            if sys.platform == 'darwin':
+                opener = 'open'
+            else:
+                opener = 'xdg-open'
+            subprocess.call([opener, filename])
+
 
 class RefLabelView(object):
     def __init__(self, label):
@@ -2351,6 +2298,8 @@ class RefLabelView(object):
         # Make widget background color green if document is in library.
         # Red if not in library.
         # Neutral if there is no DOI
+        self._status = value
+
         if value == 2:
             self.parent.setStyleSheet("background-color: rgba(0,255,0,0.25);")
         elif value == 1:
@@ -2358,6 +2307,465 @@ class RefLabelView(object):
         elif value == 0:
             self.parent.setStyleSheet("background-color: rgba(255,0,0,0.25);")
         return
+
+
+class ReferenceEntryWindow(QWidget):
+    """
+    --- Overview of Usage ---
+    User inputs a DOI. The indicator button to the left of the text box will
+    turn green if the DOI within the text field is in the user's library.
+    From there, the user can get the references for the paper, which will appear
+    in a large box below the buttons, or the user can open up the notes editor,
+    which appears in a smaller, new window. The notes can be edited and saved.
+
+    --- Features ---
+    * Indicator button next to the text field turns green if the entered DOI
+       is found in the user's library. This is done automatically.
+    * Get References button creates a list of the references for the paper
+       entered in the text box. See "ReferenceLabel" for more information.
+    * Open Notes button opens a new window with the Mendeley notes about
+       the paper. These can be edited and saved.
+
+    TODOs:
+     - Implement URL input capability, not just DOI
+     - Possibly make the window tabbed with expanded functionality?
+     - Implement reading the abstract of any paper
+
+    """
+    def __init__(self, main_paper_doi):
+        super(ReferenceEntryWindow, self).__init__()
+
+        # self.library = LibraryInterface.create('Mendeley')
+        self.fModel = FunctionModel(self)
+
+        self.main_paper_doi = main_paper_doi
+
+        # Connect copy to clipboard shortcut
+        self.copy_shortcut = QShortcut(QKeySequence("Ctrl+C"), self)
+        self.copy_shortcut.activated.connect(_copy_to_clipboard)
+
+        self.initUI()
+
+    def initUI(self):
+
+        # Make all widgets
+        self.entryLabel = QLabel('Please enter a reference')
+
+        self.ref_id_box = QLineEdit()
+        self.title_box = QLineEdit()
+        self.author_box = QLineEdit()
+        self.publication_box = QLineEdit()
+        self.year_box = QLineEdit()
+        self.doi_box = QLineEdit()
+        self.pmid_box = QLineEdit()
+        self.volume_box = QLineEdit()
+        self.issue_box = QLineEdit()
+        self.series_box = QLineEdit()
+        self.date_box = QLineEdit()
+        self.pages_box = QLineEdit()
+        self.full_citation_box = QLineEdit()
+
+        self.ref_id_box.setPlaceholderText('Reference Number')
+        self.title_box.setPlaceholderText('Title')
+        self.author_box.setPlaceholderText('Author(s)')
+        self.publication_box.setPlaceholderText('Publication')
+        self.year_box.setPlaceholderText('Year')
+        self.doi_box.setPlaceholderText('DOI')
+        self.pmid_box.setPlaceholderText('PMID')
+        self.volume_box.setPlaceholderText('Volume')
+        self.issue_box.setPlaceholderText('Issue')
+        self.series_box.setPlaceholderText('Series')
+        self.date_box.setPlaceholderText('Date')
+        self.pages_box.setPlaceholderText('Pages')
+        self.full_citation_box.setPlaceholderText('Full Citation')
+
+        self.indicator = QPushButton()
+        self.refresh = QPushButton('Sync with Library')
+        self.enter_button = QPushButton('Submit Reference')
+        self.response_label = QLabel()
+        self.ref_area = QScrollArea()
+
+        # Set connections to functions
+        self.ref_id_box.returnPressed.connect(self.submit)
+        self.title_box.returnPressed.connect(self.submit)
+        self.author_box.returnPressed.connect(self.submit)
+        self.publication_box.returnPressed.connect(self.submit)
+        self.year_box.returnPressed.connect(self.submit)
+        self.doi_box.returnPressed.connect(self.submit)
+        self.pmid_box.returnPressed.connect(self.submit)
+        self.volume_box.returnPressed.connect(self.submit)
+        self.issue_box.returnPressed.connect(self.submit)
+        self.series_box.returnPressed.connect(self.submit)
+        self.date_box.returnPressed.connect(self.submit)
+        self.pages_box.returnPressed.connect(self.submit)
+        self.full_citation_box.returnPressed.connect(self.submit)
+
+
+        self.refresh.clicked.connect(self.fModel.resync)
+        self.enter_button.clicked.connect(self.submit)
+
+
+        # Make scroll items widget
+        self.ref_items = QWidget()
+        items_layout = QVBoxLayout()
+        items_layout.addStretch(1)
+        self.ref_items.setLayout(items_layout)
+        self.ref_items_layout = self.ref_items.layout()
+
+        # Format scrollable reference area
+        self.ref_area.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
+        self.ref_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.ref_area.setWidgetResizable(True)
+        ref_layout = QVBoxLayout()
+        self.ref_area.setLayout(ref_layout)
+        self.ref_area_layout = self.ref_area.layout()
+        self.ref_area.setWidget(self.ref_items)
+        self.ref_area.hide()
+
+        text_area_top = QHBoxLayout()
+        text_area_top.addWidget(self.ref_id_box)
+        text_area_top.addWidget(self.title_box)
+        text_area_top.addWidget(self.author_box)
+
+        text_area_middle = QHBoxLayout()
+        text_area_middle.addWidget(self.publication_box)
+        text_area_middle.addWidget(self.volume_box)
+        text_area_middle.addWidget(self.issue_box)
+        text_area_middle.addWidget(self.series_box)
+
+        text_area_bottom = QHBoxLayout()
+        text_area_bottom.addWidget(self.date_box)
+        text_area_bottom.addWidget(self.year_box)
+        text_area_bottom.addWidget(self.doi_box)
+        text_area_bottom.addWidget(self.pmid_box)
+        text_area_bottom.addWidget(self.pages_box)
+        text_area_bottom.addWidget(self.full_citation_box)
+
+
+        # Create a horizontal box to be added to vbox later
+        # The radiobuttons having the same parent widget ensures
+        # that they are part of a group and only one can be checked.
+        checkboxes = QHBoxLayout()
+        checkboxes.addWidget(self.refresh)
+        checkboxes.addWidget(self.enter_button)
+        checkboxes.addStretch(1)
+
+        # Create a vertical box layout.
+        # Populate with widgets and add stretch space at the bottom.
+        self.vbox = QVBoxLayout()
+        self.vbox.addWidget(self.entryLabel)
+
+        self.vbox.addLayout(text_area_top)
+        self.vbox.addLayout(text_area_middle)
+        self.vbox.addLayout(text_area_bottom)
+        self.vbox.addLayout(checkboxes)
+        self.vbox.addWidget(self.response_label)
+        self.vbox.addWidget(self.ref_area)
+        self.vbox.addStretch(1)
+
+        self.response_label.hide()
+
+        # Set layout to be the vertical box.
+        self.setLayout(self.vbox)
+
+        # Connect copy to clipboard shortcut
+        self.copy_shortcut = QShortcut(QKeySequence("Ctrl+C"), self)
+        self.copy_shortcut.activated.connect(_copy_to_clipboard)
+
+        self.get_refs()
+
+        self.resize(800,700)
+        _center(self)
+        self.setWindowTitle('Enter Paper References')
+        self.show()
+
+    # +=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+= Start of Functions
+
+    # ++++++++++++++++++++++++++++++++++++++++++++
+    # ============================================ Main Window Button Functions
+    # ++++++++++++++++++++++++++++++++++++++++++++
+    def submit(self):
+        self.response_label.hide()
+
+        ref_id_text = self.ref_id_box.text()
+        title_text = self.title_box.text()
+        author_text = self.author_box.text()
+        publication_text = self.publication_box.text()
+        year_text = self.year_box.text()
+        doi_text = self.doi_box.text()
+        pmid_text = self.pmid_box.text()
+        volume_text = self.volume_box.text()
+        issue_text = self.issue_box.text()
+        series_text = self.series_box.text()
+        date_text = self.date_box.text()
+        pages_text = self.pages_box.text()
+        full_citation_text = self.full_citation_box.text()
+
+        ref_dict = {'ref_id':ref_id_text, 'title': title_text, 'authors': author_text,
+                       'publication': publication_text, 'year': year_text, 'doi': doi_text, 'pmid': pmid_text,
+                       'volume': volume_text, 'issue': issue_text, 'series': series_text, 'date': date_text,
+                       'pages': pages_text, 'citation': full_citation_text}
+
+        # Remove any text fields that have not been filled out
+        sd_copy = dict(ref_dict)
+        for k, v in ref_dict.items():
+            if v is None or v == '':
+                del sd_copy[k]
+
+        ref_dict = sd_copy
+        db.add_reference(ref_dict, main_doi=self.main_paper_doi)
+        label = self.ref_to_label(ref=ref_dict)
+        self.ref_items_layout.insertWidget(self.ref_area_layout.count() - 1, label)
+
+        self.response_label.hide()
+        self.ref_area.show()
+
+    def get_refs(self):
+        """
+        Gets references for paper corresponding to the DOI in text field.
+        Displays reference information in scrollable area.
+        """
+        self.response_label.hide()
+
+        # Get DOI from text field and handle blank entry
+        entered_doi = self.main_paper_doi
+
+        # Resolve DOI and get references
+        refs = self.fModel.retrieve_only_refs(doi=entered_doi)
+
+        if refs is None or len(refs) == 0:
+            return
+
+        # First clean up existing GUI window.
+        # If there are widgets in the layout (i.e. from the last call to 'get_refs'),
+        # delete all of those reference labels before adding more.
+        _delete_all_widgets(self.ref_items_layout)
+
+        for ref in refs:
+            ref_label = self.ref_to_label(ref)
+            self.ref_items_layout.insertWidget(self.ref_area_layout.count() - 1, ref_label)
+
+        self.response_label.hide()
+        self.ref_area.show()
+
+    # ++++++++++++++++++++++++++++++++++++++++++++
+    # ============================================ Reference Label Functions
+    # ++++++++++++++++++++++++++++++++++++++++++++
+    def ref_to_label(self, ref):
+        """
+        Creates a ReferenceLabel object from a single paper reference.
+        Formats title, author information for display, connects functionality
+        to the label object.
+        Used by get_refs().
+
+        Parameters
+        ----------
+        ref: dict
+            Contains information from a single paper reference.
+
+        Returns
+        -------
+        ref_label: ReferenceLabel
+            For display in reference box.
+        """
+        # Extract main display info
+        ref_id = ref.get('ref_id')
+        ref_title = ref.get('title')
+        ref_author_list = ref.get('authors')
+        ref_doi = ref.get('doi')
+        ref_year = ref.get('year')
+        if ref_year is None:
+            ref_year = ref.get('date')
+
+        if isinstance(ref_author_list, str):
+            ref_author_list = ref_author_list.split('; ')
+
+        # Format short and long author lists
+        if ref_author_list is not None:
+            ref_full_authors = '; '.join(ref_author_list)
+            if len(ref_author_list) > 2:
+                ref_first_authors = ref_author_list[0] + ', ' + ref_author_list[1] + ', et al.'
+            else:
+                ref_first_authors = ref_full_authors
+        else:
+            ref_first_authors = ''
+            ref_full_authors = ''
+
+        # Initialize indicator about whether reference is in library
+        in_lib = 3
+
+        # Build up strings with existing info
+        # Small text is for abbreviated preview.
+        # Expanded text is additional information for the larger
+        # reference view when a label is clicked.
+        ref_small_text = ''
+        ref_expanded_text = ''
+        if ref_id is not None:
+            ref_small_text = ref_small_text + str(ref_id) + '. '
+            ref_expanded_text = ref_expanded_text + str(ref_id) + '. '
+        if ref_author_list is not None:
+            ref_small_text = ref_small_text + ref_first_authors
+            ref_expanded_text = ref_expanded_text + ref_full_authors
+        if ref.get('publication') is not None:
+            ref_expanded_text = ref_expanded_text + '\n' + ref.get('publication')
+        if ref_year is not None:
+            ref_small_text = ref_small_text + ', ' + ref_year
+            ref_expanded_text = ref_expanded_text + ', ' + ref_year
+        if ref_title is not None:
+            ref_small_text = ref_small_text + ', ' + ref_title
+            ref_expanded_text = ref_expanded_text + '\n' + ref_title
+        if ref_doi is not None:
+            ref_expanded_text = ref_expanded_text + '\n' + ref_doi
+            try:
+                doc_json = self.library.get_document(ref_doi, return_json=True)
+                has_file = doc_json.get('file_attached')
+                if has_file:
+                    in_lib = 2
+                else:
+                    in_lib = 1
+            except Exception:
+                in_lib = 0
+
+        # Cut off length of small text to fit within window
+        ref_small_text = td(ref_small_text, 66)
+
+        # Make ReferenceLabel object and set attributes
+        ref_label = ReferenceLabel(ref_small_text, self)
+        ref_label.small_text = ref_small_text
+        ref_label.expanded_text = ref_expanded_text
+        ref_label.reference = ref
+        ref_label.doi = ref.get('doi')
+        ref_label.status = in_lib
+
+        # Append all labels to reference text lists in in Data()
+        self.data.small_ref_labels.append(ref_small_text)
+        self.data.expanded_ref_labels.append(ref_expanded_text)
+
+        return ref_label
+
+
+    # ++++++++++++++++++++++++++++++++++++++++++++
+    # ============================================ Misc. Functions
+    # ++++++++++++++++++++++++++++++++++++++++++++
+    def update_document_status(self, doi=None, adding=False, popups=True, sync=True):
+        """
+        Updates the indicators about whether a certain paper is in the user's library.
+        Change color of indicator.
+
+        Parameters
+        ----------
+        doi : str
+            DOI of the paper to check for.
+        adding : bool
+            Indicates whether a paper is being added or deleted.
+        """
+        if sync:
+            self.library.sync()
+
+        if doi is None:
+            doi = self.doc_selector.value
+            if doi is None:
+                return
+
+        try:
+            doc_json = self.library.get_document(doi, return_json=True)
+        except DocNotFoundError:
+            # Document was not found in library
+            if adding:
+                if popups:
+                    _send_msg('Document not in library.')
+            self.data.doc_response_json = None
+            self.doc_selector.status = 0
+        except Exception:
+            if adding:
+                if popups:
+                    _send_msg('An error occurred during sync.\nDocument may not have been added.')
+            self.data.doc_response_json = None
+            self.doc_selector.status = 0
+        else:
+            has_file = doc_json.get('file_attached')
+            if has_file is not None:
+                # If no file is found, there may have been an error.
+                # Give users the ability to delete the document that was added without file.
+                if not has_file:
+                    msgBox = QMessageBox()
+                    msgBox.setText('Document was added without a file attached.\n'
+                                   'If this was in error, you may choose to delete\n'
+                                   'the file and add again. Otherwise, ignore this message.')
+                    delete_button = QPushButton('Delete')
+                    msgBox.addButton(delete_button, QMessageBox.RejectRole)
+                    delete_button.clicked.connect(lambda: self.move_to_trash(doi=doi))
+                    msgBox.addButton(QPushButton('Ignore'), QMessageBox.AcceptRole)
+
+                    reply = msgBox.exec_()
+
+                    # If the user chose to ignore, exit this function.
+                    if reply != QMessageBox.Accepted:
+                        # 1 = document in library without attached file
+                        self.data.doc_response_json = doc_json
+                        self.doc_selector.status = 1
+                        return
+                else:
+                    # 2 = document in library with attached file
+                    self.data.doc_response_json = doc_json
+                    self.doc_selector.status = 2
+
+
+    # ++++++++++++++++++++++++++++++++++++++++++++
+    # ============================================ Internal Functions
+    # ++++++++++++++++++++++++++++++++++++++++++++
+    def _check_lib(self, doi=None):
+        """
+        Checks library for a DOI, returns true if found.
+
+        Parameters
+        ----------
+        doi : str
+            DOI of the paper to look up.
+
+        Returns
+        -------
+        in_library: bool
+            True if DOI is found in the user's library.
+            False otherwise.
+        """
+        if doi is None:
+            entered_doi = self.doc_selector.value
+        else: entered_doi = doi
+
+        if entered_doi == '':
+            return False
+        in_library = self.library.check_for_document(entered_doi)
+        return in_library
+
+    def _set_response_message(self, message):
+        """
+        Sets the line of text to indicate program status.
+        """
+        self.response_label.setText(message)
+        self.response_label.repaint()
+        qApp.processEvents()
+        self.response_label.show()
+
+    def _populate_data(self, info):
+        """
+        Sets attributes of Data object with information about the paper
+        being searched for in the main text box.
+
+        Parameters
+        ----------
+        info : PaperInfo object
+            See pypub.paper_info
+            Holds information about a paper.
+        """
+        self.data.entry = info.entry
+        self.data.references = info.references
+        self.data.doi = info.doi
+        self.data.scraper_obj = info.scraper_obj
+        self.data.pdf_link = info.pdf_link
+        self.data.url = info.url
+        self.data.small_ref_labels = []
+        self.data.expanded_ref_labels = []
 
 
 class LibraryInterface(object):
@@ -2429,6 +2837,10 @@ class MendeleyLibraryInterface(LibraryInterface):
 
     def add_to_library(self, doi):
         self.lib.add_to_library(doi=doi)
+
+    def get_file_content_from_doc_id(self, doc_id):
+        file_content, file_name, file_id = self.api.files.get_file_content_from_doc_id(doc_id=doc_id)
+        return file_content, file_name, file_id
 
 
 class Data(object):
