@@ -88,6 +88,7 @@ class EntryWindow(QWidget):
         self.add_to_lib = QPushButton('Add to Library')
         self.trash = QPushButton('Move to Trash')
         self.forward_refs = QPushButton('Follow Refs Forward')
+        self.manual_entry = QPushButton('Enter References')
         self.history = QComboBox()
         self.response_label = QLabel()
         self.ref_area = QScrollArea()
@@ -105,6 +106,7 @@ class EntryWindow(QWidget):
         self.refresh.clicked.connect(self.fModel.resync)
         self.trash.clicked.connect(self.move_to_trash)
         self.forward_refs.clicked.connect(self.follow_refs_forward)
+        self.manual_entry.clicked.connect(self.ref_entry)
 
 
         # Make scroll items widget
@@ -142,6 +144,7 @@ class EntryWindow(QWidget):
         line2.addWidget(self.trash)
         line2.addWidget(self.forward_refs)
         line2.addWidget(self.history)
+        line2.addWidget(self.manual_entry)
         line2.addStretch(1)
 
         # Create a vertical box layout.
@@ -170,7 +173,7 @@ class EntryWindow(QWidget):
 
         # Connect copy to clipboard shortcut
         self.copy_shortcut = QShortcut(QKeySequence("Ctrl+C"), self)
-        self.copy_shortcut.activated.connect(_copy_to_clipboard)
+        self.copy_shortcut.activated.connect(lambda: _copy_to_clipboard(self.textEntry.textCursor().selectedText()))
 
         # Sizing, centering, and showing
         # self.resize(800,700)
@@ -207,7 +210,7 @@ class EntryWindow(QWidget):
 
     def text_changed(self):
         doc_id = self.doc_selector.value
-        self.update_document_status(doi=doc_id, sync=False, popups=False)
+        self.update_document_status(doi=doc_id, adding=False, sync=False, popups=False)
 
     def get_refs(self):
         """
@@ -227,6 +230,7 @@ class EntryWindow(QWidget):
         refs = self.fModel.retrieve_only_refs(doi=entered_doi)
 
         if refs is None or len(refs) == 0:
+            self.data.references = None
             _send_msg('No references found.')
             return
 
@@ -343,6 +347,44 @@ class EntryWindow(QWidget):
 
         # self.response_label.hide()
         self.ref_area.show()
+
+    def ref_entry(self):
+        if self.doc_selector.status != 2:
+            _send_msg('Paper must be in library and have an attached PDF for manual reference entry.')
+            return
+
+        if self.doc_selector.entry_type == 'doi':
+            doi = self.doc_selector.value
+        elif self.data.doi is not None:
+            doi = self.data.doi
+        else:
+            _send_msg('Reference entry requires a DOI.')
+            return
+
+        if self.data.doc_response_json is not None:
+            doc = self.data.doc_response_json
+        else:
+            doc = self.library.get_document(doi=doi, return_json=True)
+        doc_id = doc.get('id')
+
+        # First get the content and name of the attached pdf
+        try:
+            file_content, _, file_id = self.library.get_file_content_from_doc_id(doc_id=doc_id)
+        except Exception as exc:
+            _send_msg('File retrieval from Mendeley failed.')
+            return
+
+        # Get the directory of the current running script to use for temp storage
+        package_path = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))
+        temp_filename = os.path.join(package_path, 'temp.pdf')
+
+        # with open(temp_filename, 'wb') as temp_file:
+        #     temp_file.write(file_content)
+
+        ref_window = ReferenceEntryWindow(main_paper_doi=doi, references=self.data.references)
+        # ref_window.show()
+
+        # _open_file(filename=temp_filename)
 
     def add_all_refs(self):
         """
@@ -596,30 +638,36 @@ class EntryWindow(QWidget):
         else:
             has_file = doc_json.get('file_attached')
             if has_file is not None:
-                # If no file is found, there may have been an error.
-                # Give users the ability to delete the document that was added without file.
-                if not has_file:
-                    msgBox = QMessageBox()
-                    msgBox.setText('Document was added without a file attached.\n'
-                                   'If this was in error, you may choose to delete\n'
-                                   'the file and add again. Otherwise, ignore this message.')
-                    delete_button = QPushButton('Delete')
-                    msgBox.addButton(delete_button, QMessageBox.RejectRole)
-                    delete_button.clicked.connect(lambda: self.move_to_trash(doi=doi))
-                    msgBox.addButton(QPushButton('Ignore'), QMessageBox.AcceptRole)
+                if adding:
+                    # If no file is found, there may have been an error.
+                    # Give users the ability to delete the document that was added without file.
+                    if not has_file:
+                        msgBox = QMessageBox()
+                        msgBox.setText('Document was added without a file attached.\n'
+                                       'If this was in error, you may choose to delete\n'
+                                       'the file and add again. Otherwise, ignore this message.')
+                        delete_button = QPushButton('Delete')
+                        msgBox.addButton(delete_button, QMessageBox.RejectRole)
+                        delete_button.clicked.connect(lambda: self.move_to_trash(doi=doi))
+                        msgBox.addButton(QPushButton('Ignore'), QMessageBox.AcceptRole)
 
-                    reply = msgBox.exec_()
+                        reply = msgBox.exec_()
 
-                    # If the user chose to ignore, exit this function.
-                    if reply != QMessageBox.Accepted:
-                        # 1 = document in library without attached file
+                        # If the user chose to ignore, exit this function.
+                        if reply != QMessageBox.Accepted:
+                            # 1 = document in library without attached file
+                            self.data.doc_response_json = doc_json
+                            self.doc_selector.status = 1
+                            return
+                    else:
+                        # 2 = document in library with attached file
                         self.data.doc_response_json = doc_json
-                        self.doc_selector.status = 1
-                        return
+                        self.doc_selector.status = 2
                 else:
-                    # 2 = document in library with attached file
-                    self.data.doc_response_json = doc_json
-                    self.doc_selector.status = 2
+                    if has_file:
+                        self.doc_selector.status = 2
+                    else:
+                        self.doc_selector.status = 1
 
 
     # ++++++++++++++++++++++++++++++++++++++++++++
@@ -1962,13 +2010,12 @@ class ReferenceLabel(QLabel):
                     msgBox = QMessageBox()
                     msgBox.setText('The current DOI, %s, for the document with title %s is trying to be '
                                    'replaced by the DOI %s. Is this correct?')
-                    msgBox.addButton(QMessageBox.YesButton)
-                    msgBox.addButton(QMessageBox.NoButton)
+                    msgBox.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
 
                     reply = msgBox.exec_()
 
                     # If the user chose yes, overwrite current DOI with new DOI.
-                    if reply == QMessageBox.Accepted:
+                    if reply == QMessageBox.Yes:
                         self.doi = adding_doi
 
         doi = self.doi
@@ -1996,8 +2043,9 @@ class ReferenceLabel(QLabel):
                     if not has_file:
                         msgBox = QMessageBox()
                         msgBox.setText('Document was added without a file attached.\n'
+                                       'Automatic PDF retrieval may have failed.\n'
                                        'If this was in error, you may choose to delete\n'
-                                       'the file and add again. Otherwise, ignore this message.')
+                                       'the document and attempt to add again. Otherwise, ignore this message.')
                         delete_button = QPushButton('Delete')
                         msgBox.addButton(delete_button, QMessageBox.RejectRole)
                         delete_button.clicked.connect(lambda: self.move_doc_to_trash(doi=doi))
@@ -2245,43 +2293,13 @@ class ReferenceLabel(QLabel):
         self.update_status(doi=doi, popups=False)
 
     def ref_entry(self):
-        print(self.status)
         if self.status != 2:
             _send_msg('Paper must be in library and have an attached PDF for manual reference entry.')
             return
 
-        doc = self.parent.library.get_document(doi=self.doi, return_json=True)
-        doc_id = doc.get('id')
-
-        # First get the content and name of the attached pdf
-        try:
-            file_content, _, file_id = self.parent.library.get_file_content_from_doc_id(doc_id=doc_id)
-        except Exception as exc:
-            _send_msg('File retrieval from Mendeley failed.')
-            return
-
-        # Get the directory of the current running script to use for temp storage
-        package_path = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))
-        temp_filename = os.path.join(package_path, 'temp.pdf')
-
-        # with open(temp_filename, 'wb') as temp_file:
-        #     temp_file.write(file_content)
-
-        ref_window = ReferenceEntryWindow(main_paper_doi=self.doi)
-        # ref_window.show()
-
-        # self._open_file(filename=temp_filename)
-
-    def _open_file(self, filename):
-        # Platform-independent file opening calls
-        if sys.platform == 'win32':
-            os.startfile(filename)
-        else:
-            if sys.platform == 'darwin':
-                opener = 'open'
-            else:
-                opener = 'xdg-open'
-            subprocess.call([opener, filename])
+        self.parent.textEntry.setText(self.doi)
+        self.parent.focus()
+        self.parent.ref_entry()
 
 
 class RefLabelView(object):
@@ -2332,13 +2350,22 @@ class ReferenceEntryWindow(QWidget):
      - Implement reading the abstract of any paper
 
     """
-    def __init__(self, main_paper_doi):
+    def __init__(self, main_paper_doi, references=None):
         super(ReferenceEntryWindow, self).__init__()
 
         # self.library = LibraryInterface.create('Mendeley')
         self.fModel = FunctionModel(self)
+        self.data = Data()
 
         self.main_paper_doi = main_paper_doi
+        self.references = references
+
+        self.doi_list = []
+        self.title_list = []
+        if self.references is not None:
+            for ref in references:
+                self.doi_list.append(ref.doi)
+                self.title_list.append(ref.title)
 
         # Connect copy to clipboard shortcut
         self.copy_shortcut = QShortcut(QKeySequence("Ctrl+C"), self)
@@ -2379,9 +2406,14 @@ class ReferenceEntryWindow(QWidget):
         self.pages_box.setPlaceholderText('Pages')
         self.full_citation_box.setPlaceholderText('Full Citation')
 
+        self.widget_list = [self.title_box, self.author_box, self.publication_box, self.year_box,
+                            self.doi_box, self.pmid_box, self.volume_box, self.issue_box, self.series_box,
+                            self.date_box, self.pages_box, self.full_citation_box]
+
         self.indicator = QPushButton()
         self.refresh = QPushButton('Sync with Library')
         self.enter_button = QPushButton('Submit Reference')
+        self.clear_button = QPushButton('Clear Fields')
         self.response_label = QLabel()
         self.ref_area = QScrollArea()
 
@@ -2403,6 +2435,7 @@ class ReferenceEntryWindow(QWidget):
 
         self.refresh.clicked.connect(self.fModel.resync)
         self.enter_button.clicked.connect(self.submit)
+        self.clear_button.clicked.connect(lambda: self._reset_forms(next_id=False))
 
 
         # Make scroll items widget
@@ -2448,6 +2481,7 @@ class ReferenceEntryWindow(QWidget):
         checkboxes = QHBoxLayout()
         checkboxes.addWidget(self.refresh)
         checkboxes.addWidget(self.enter_button)
+        checkboxes.addWidget(self.clear_button)
         checkboxes.addStretch(1)
 
         # Create a vertical box layout.
@@ -2472,7 +2506,7 @@ class ReferenceEntryWindow(QWidget):
         self.copy_shortcut = QShortcut(QKeySequence("Ctrl+C"), self)
         self.copy_shortcut.activated.connect(_copy_to_clipboard)
 
-        self.get_refs()
+        self.display_refs(refs=self.references)
 
         self.resize(800,700)
         _center(self)
@@ -2511,27 +2545,57 @@ class ReferenceEntryWindow(QWidget):
         for k, v in ref_dict.items():
             if v is None or v == '':
                 del sd_copy[k]
-
         ref_dict = sd_copy
-        db.add_reference(ref_dict, main_doi=self.main_paper_doi)
+
+        print(self.doi_list)
+        print()
+        print(doi_text)
+
+        # Warn the user about adding duplicates
+        if title_text in self.title_list:
+            msgBox = QMessageBox()
+            msgBox.setText('There is already a reference with the given title.\n'
+                           'Would you still like to add this reference?')
+            msgBox.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+            reply = msgBox.exec_()
+
+            # If the user chooses No, do nothing.
+            if reply == QMessageBox.No:
+                return
+        elif doi_text in self.doi_list:
+            msgBox = QMessageBox()
+            msgBox.setText('There is already a reference with the given DOI.\n'
+                           'Would you still like to add this reference?')
+            msgBox.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+
+            reply = msgBox.exec_()
+
+            # If the user chooses No, do nothing.
+            if reply == QMessageBox.No:
+                return
+
+
+        db.add_reference([ref_dict], main_doi=self.main_paper_doi)
         label = self.ref_to_label(ref=ref_dict)
         self.ref_items_layout.insertWidget(self.ref_area_layout.count() - 1, label)
+
+        self._reset_forms()
 
         self.response_label.hide()
         self.ref_area.show()
 
-    def get_refs(self):
+    def display_refs(self, refs=None):
         """
         Gets references for paper corresponding to the DOI in text field.
         Displays reference information in scrollable area.
         """
         self.response_label.hide()
 
+        if refs is None:
+            return
+
         # Get DOI from text field and handle blank entry
         entered_doi = self.main_paper_doi
-
-        # Resolve DOI and get references
-        refs = self.fModel.retrieve_only_refs(doi=entered_doi)
 
         if refs is None or len(refs) == 0:
             return
@@ -2714,6 +2778,19 @@ class ReferenceEntryWindow(QWidget):
     # ++++++++++++++++++++++++++++++++++++++++++++
     # ============================================ Internal Functions
     # ++++++++++++++++++++++++++++++++++++++++++++
+    def _reset_forms(self, next_id=True):
+        if next_id:
+            # Increment the reference ID by 1
+            ref_num = self.ref_id_box.text()
+            if ref_num is not None:
+                number = int(ref_num)
+                number += 1
+                self.ref_id_box.setText(str(number))
+
+        # Reset all other forms
+        for textline in self.widget_list:
+            textline.setText('')
+
     def _check_lib(self, doi=None):
         """
         Checks library for a DOI, returns true if found.
@@ -2969,15 +3046,28 @@ def _delete_all_widgets(layout):
         item.deleteLater()
 
 
-def _copy_to_clipboard():
+def _copy_to_clipboard(text):
     clipboard = QApplication.clipboard()
-    #clipboard.setText()
+    clipboard.setText(text)
     event = QEvent(QEvent.Clipboard)
     app.sendEvent(clipboard, event)
 
 
 def _send_msg(message):
     QMessageBox.information(QMessageBox(), 'Information', message)
+
+
+def _open_file(self, filename):
+        # Platform-independent file opening calls
+        if sys.platform == 'win32':
+            os.startfile(filename)
+        else:
+            if sys.platform == 'darwin':
+                opener = 'open'
+            else:
+                opener = 'xdg-open'
+            subprocess.call([opener, filename])
+
 
 if __name__ == '__main__':
 
