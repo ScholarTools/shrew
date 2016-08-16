@@ -349,10 +349,13 @@ class EntryWindow(QWidget):
         self.ref_area.show()
 
     def ref_entry(self):
-        if self.doc_selector.status != 2:
-            _send_msg('Paper must be in library and have an attached PDF for manual reference entry.')
-            return
+        """
+        This function is for manual reference entry. It creates a pop-up window in which
+        a user may enter the information for each reference by hand.
+        If there is a file found in their library for the document, the user has the option
+        to open it up for reference.
 
+        """
         if self.doc_selector.entry_type == 'doi':
             doi = self.doc_selector.value
         elif self.data.doi is not None:
@@ -367,24 +370,32 @@ class EntryWindow(QWidget):
             doc = self.library.get_document(doi=doi, return_json=True)
         doc_id = doc.get('id')
 
-        # First get the content and name of the attached pdf
-        try:
-            file_content, _, file_id = self.library.get_file_content_from_doc_id(doc_id=doc_id)
-        except Exception as exc:
-            _send_msg('File retrieval from Mendeley failed.')
-            return
+        # If there is a file attached to the user's document, offer the option to open the file.
+        if self.doc_selector.status == 2:
+            reply = QMessageBox.question(self, 'Message', 'A file has been found for this document.\n'
+                  'Would you like to open it for reference?', QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
 
-        # Get the directory of the current running script to use for temp storage
-        package_path = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))
-        temp_filename = os.path.join(package_path, 'temp.pdf')
+            if reply == QMessageBox.Yes:
+                # Get the content and name of the attached pdf
+                try:
+                    file_content, _, file_id = self.library.get_file_content_from_doc_id(doc_id=doc_id)
+                except Exception as exc:
+                    _send_msg('File retrieval from Mendeley failed.')
+                    return
 
-        # with open(temp_filename, 'wb') as temp_file:
-        #     temp_file.write(file_content)
+                # Get the directory of the current running script to use for temp storage
+                package_path = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))
+                temp_filename = os.path.join(package_path, 'temp.pdf')
+
+                # Write contents of pdf from user library to a temporary file.
+                with open(temp_filename, 'wb') as temp_file:
+                    temp_file.write(file_content)
+
+                # Open the temp file for viewing
+                _open_file(filename=temp_filename)
 
         ref_window = ReferenceEntryWindow(main_paper_doi=doi, references=self.data.references)
-        # ref_window.show()
-
-        # _open_file(filename=temp_filename)
+        ref_window.show()
 
     def add_all_refs(self):
         """
@@ -580,7 +591,15 @@ class EntryWindow(QWidget):
             return
         doc_json = self.data.doc_response_json
         if doc_json is None:
-            raise LookupError('Main document JSON not found')
+            if self.doc_selector.entry_type == 'doi':
+                doi = self.doc_selector.value
+                doc_json = self.library.get_document(doi=doi, return_json=True)
+            else:
+                raise LookupError('Need DOI to open notes box.')
+
+        if doc_json is None:
+            raise LookupError('Main document information not found')
+
         notes = doc_json.get('notes')
 
         # Add entry to history
@@ -2293,9 +2312,9 @@ class ReferenceLabel(QLabel):
         self.update_status(doi=doi, popups=False)
 
     def ref_entry(self):
-        if self.status != 2:
-            _send_msg('Paper must be in library and have an attached PDF for manual reference entry.')
-            return
+        # if self.status != 2:
+        #     _send_msg('Paper must be in library and have an attached PDF for manual reference entry.')
+        #     return
 
         self.parent.textEntry.setText(self.doi)
         self.parent.focus()
@@ -2547,10 +2566,6 @@ class ReferenceEntryWindow(QWidget):
                 del sd_copy[k]
         ref_dict = sd_copy
 
-        print(self.doi_list)
-        print()
-        print(doi_text)
-
         # Warn the user about adding duplicates
         if title_text in self.title_list:
             msgBox = QMessageBox()
@@ -2573,7 +2588,6 @@ class ReferenceEntryWindow(QWidget):
             # If the user chooses No, do nothing.
             if reply == QMessageBox.No:
                 return
-
 
         db.add_reference([ref_dict], main_doi=self.main_paper_doi)
         label = self.ref_to_label(ref=ref_dict)
