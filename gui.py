@@ -394,7 +394,7 @@ class EntryWindow(QWidget):
                 # Open the temp file for viewing
                 _open_file(filename=temp_filename)
 
-        ref_window = ReferenceEntryWindow(main_paper_doi=doi, references=self.data.references)
+        ref_window = ReferenceEntryWindow(main_paper_doi=doi, library=self.library)
         ref_window.show()
 
     def add_all_refs(self):
@@ -1949,6 +1949,16 @@ class ReferenceLabel(QLabel):
         self.reference = None
         self.doi = None
 
+        self.menu = QMenu(self)
+        self.add_to_lib = self.menu.addAction("Add to library")
+        self.ref_lookup = self.menu.addAction("Look up references")
+        self.ref_follow_forward = self.menu.addAction("Follow refs forward")
+        self.move_to_trash = self.menu.addAction("Move to trash")
+        self.add_doi = self.menu.addAction("Find DOI")
+        self.manual_ref_entry = self.menu.addAction("Manual Reference Entry")
+        self.copy_doi = self.menu.addAction("Copy DOI")
+        self.menu.setStyleSheet("QMenu { background-color: #d9d9d9; }")
+
         self.ClickFilter = ClickFilter(self)
         self.installEventFilter(self.ClickFilter)
 
@@ -2113,29 +2123,21 @@ class ReferenceLabel(QLabel):
                                   updating_value=[has_file, in_lib], filter_by_doi=True)
 
     def contextMenuEvent(self, QContextMenuEvent):
-        menu = QMenu(self)
-        menu.setStyleSheet("QMenu { background-color: #d9d9d9; }")
-
-        add_to_lib = menu.addAction("Add to library")
-        ref_lookup = menu.addAction("Look up references")
-        ref_follow_forward = menu.addAction("Follow refs forward")
-        move_to_trash = menu.addAction("Move to trash")
-        add_doi = menu.addAction("Find DOI")
-        ref_entry = menu.addAction("Manual Reference Entry")
-
-        action = menu.exec_(self.mapToGlobal(QContextMenuEvent.pos()))
-        if action == add_to_lib:
+        action = self.menu.exec_(self.mapToGlobal(QContextMenuEvent.pos()))
+        if action == self.add_to_lib:
             self.add_to_library_from_label(self.doi)
-        elif action == ref_lookup:
+        elif action == self.ref_lookup:
             self.lookup_ref(self.doi)
-        elif action == ref_follow_forward:
+        elif action == self.ref_follow_forward:
             self.follow_forward(self.doi)
-        elif action == move_to_trash:
+        elif action == self.move_to_trash:
             self.move_doc_to_trash(self.doi)
-        elif action == add_doi:
+        elif action == self.add_doi:
             self.add_doi()
-        elif action == ref_entry:
+        elif action == self.manual_ref_entry:
             self.ref_entry()
+        elif action == self.copy_doi:
+            self.copy_doi()
 
     # ++++++++++++++++++++++++++++++++++++++++++++
     # ============================================ Reference Label Right-Click Functions
@@ -2320,6 +2322,10 @@ class ReferenceLabel(QLabel):
         self.parent.focus()
         self.parent.ref_entry()
 
+    def copy_doi(self):
+        if self.doi is not None:
+            _copy_to_clipboard(self.doi)
+
 
 class RefLabelView(object):
     def __init__(self, label):
@@ -2346,6 +2352,22 @@ class RefLabelView(object):
         return
 
 
+class ReferenceEntryLabel(ReferenceLabel):
+    def __init__(self, text, parent):
+        super().__init__(text=text, parent=parent)
+        self.delete_ref = self.menu.addAction("Delete Reference")
+        self.menu.setStyleSheet("QMenu { background-color: #d9d9d9; }")
+
+    def contextMenuEvent(self, QContextMenuEvent):
+        action = self.menu.exec_(self.mapToGlobal(QContextMenuEvent.pos()))
+        if action == self.delete_ref:
+            self.delete_reference()
+
+    def delete_reference(self):
+        db.delete_reference(self.reference)
+        self.parent.remove_label(self)
+
+
 class ReferenceEntryWindow(QWidget):
     """
     --- Overview of Usage ---
@@ -2369,14 +2391,14 @@ class ReferenceEntryWindow(QWidget):
      - Implement reading the abstract of any paper
 
     """
-    def __init__(self, main_paper_doi, references=None):
+    def __init__(self, main_paper_doi, library, references=None):
         super(ReferenceEntryWindow, self).__init__()
 
-        # self.library = LibraryInterface.create('Mendeley')
         self.fModel = FunctionModel(self)
         self.data = Data()
 
         self.main_paper_doi = main_paper_doi
+        self.library = library
         self.references = references
 
         self.doi_list = []
@@ -2431,6 +2453,7 @@ class ReferenceEntryWindow(QWidget):
 
         self.indicator = QPushButton()
         self.refresh = QPushButton('Sync with Library')
+        self.get_refs_button = QPushButton('Get References')
         self.enter_button = QPushButton('Submit Reference')
         self.clear_button = QPushButton('Clear Fields')
         self.response_label = QLabel()
@@ -2453,6 +2476,7 @@ class ReferenceEntryWindow(QWidget):
 
 
         self.refresh.clicked.connect(self.fModel.resync)
+        self.get_refs_button.clicked.connect(self.get_refs)
         self.enter_button.clicked.connect(self.submit)
         self.clear_button.clicked.connect(lambda: self._reset_forms(next_id=False))
 
@@ -2499,6 +2523,7 @@ class ReferenceEntryWindow(QWidget):
         # that they are part of a group and only one can be checked.
         checkboxes = QHBoxLayout()
         checkboxes.addWidget(self.refresh)
+        checkboxes.addWidget(self.get_refs_button)
         checkboxes.addWidget(self.enter_button)
         checkboxes.addWidget(self.clear_button)
         checkboxes.addStretch(1)
@@ -2537,6 +2562,25 @@ class ReferenceEntryWindow(QWidget):
     # ++++++++++++++++++++++++++++++++++++++++++++
     # ============================================ Main Window Button Functions
     # ++++++++++++++++++++++++++++++++++++++++++++
+    def get_refs(self):
+        """
+        Gets references for paper corresponding to the DOI in text field.
+        Displays reference information in scrollable area.
+        """
+        if self.main_paper_doi == '':
+            self._set_response_message('Please enter text above.')
+            return
+
+        # Resolve DOI and get references
+        refs = self.fModel.retrieve_only_refs(doi=self.main_paper_doi)
+
+        if refs is None or len(refs) == 0:
+            self.data.references = None
+            _send_msg('No references found.')
+            return
+
+        self.display_refs(refs)
+
     def submit(self):
         self.response_label.hide()
 
@@ -2622,6 +2666,8 @@ class ReferenceEntryWindow(QWidget):
         for ref in refs:
             ref_label = self.ref_to_label(ref)
             self.ref_items_layout.insertWidget(self.ref_area_layout.count() - 1, ref_label)
+            self.doi_list.append(ref.doi)
+            self.title_list.append(ref.title)
 
         self.response_label.hide()
         self.ref_area.show()
@@ -2708,7 +2754,7 @@ class ReferenceEntryWindow(QWidget):
         ref_small_text = td(ref_small_text, 66)
 
         # Make ReferenceLabel object and set attributes
-        ref_label = ReferenceLabel(ref_small_text, self)
+        ref_label = ReferenceEntryLabel(ref_small_text, self)
         ref_label.small_text = ref_small_text
         ref_label.expanded_text = ref_expanded_text
         ref_label.reference = ref
@@ -2720,6 +2766,11 @@ class ReferenceEntryWindow(QWidget):
         self.data.expanded_ref_labels.append(ref_expanded_text)
 
         return ref_label
+
+    def remove_label(self, label):
+        # index = self.ref_items_layout.indexOf(label)
+        self.ref_items_layout.removeWidget(label)
+        label.deleteLater()
 
 
     # ++++++++++++++++++++++++++++++++++++++++++++
@@ -3071,7 +3122,7 @@ def _send_msg(message):
     QMessageBox.information(QMessageBox(), 'Information', message)
 
 
-def _open_file(self, filename):
+def _open_file(filename):
         # Platform-independent file opening calls
         if sys.platform == 'win32':
             os.startfile(filename)
