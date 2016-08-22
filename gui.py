@@ -1891,7 +1891,7 @@ class FunctionModel(object):
             label = ref_labels.itemAt(x).widget()
             label.update_status(doi=label.doi, adding=True, popups=False, sync=False)
 
-    def resync(self):
+    def resync(self, main_window=True):
         self.window._set_response_message('Re-syncing with Mendeley...')
         self.window.library.sync()
 
@@ -1901,7 +1901,9 @@ class FunctionModel(object):
                 label = self.window.ref_items_layout.itemAt(x).widget()
                 label.update_status(adding=False, popups=False, sync=False)
 
-        self.window.update_document_status(adding=False, popups=False, sync=False)
+        # This does not run if resync is called from the manual reference entry window.
+        if main_window:
+            self.window.update_document_status(adding=False, popups=False, sync=False)
         self.window.response_label.hide()
 
 
@@ -1931,7 +1933,6 @@ class ReferenceLabel(QLabel):
         - Move to trash
            Moves the document and file from the user's Mendeley library to the trash.
            Requires that the document be in the user's library.
-
     """
 
     def __init__(self, text, parent):
@@ -2137,7 +2138,7 @@ class ReferenceLabel(QLabel):
         elif action == self.manual_ref_entry:
             self.ref_entry()
         elif action == self.copy_doi:
-            self.copy_doi()
+            self.copy_doi_to_clipboard()
 
     # ++++++++++++++++++++++++++++++++++++++++++++
     # ============================================ Reference Label Right-Click Functions
@@ -2322,7 +2323,7 @@ class ReferenceLabel(QLabel):
         self.parent.focus()
         self.parent.ref_entry()
 
-    def copy_doi(self):
+    def copy_doi_to_clipboard(self):
         if self.doi is not None:
             _copy_to_clipboard(self.doi)
 
@@ -2453,7 +2454,7 @@ class ReferenceEntryWindow(QWidget):
 
         self.indicator = QPushButton()
         self.refresh = QPushButton('Sync with Library')
-        self.get_refs_button = QPushButton('Get References')
+        self.get_refs_button = QPushButton('Get/Display References')
         self.enter_button = QPushButton('Submit Reference')
         self.clear_button = QPushButton('Clear Fields')
         self.response_label = QLabel()
@@ -2771,73 +2772,6 @@ class ReferenceEntryWindow(QWidget):
         # index = self.ref_items_layout.indexOf(label)
         self.ref_items_layout.removeWidget(label)
         label.deleteLater()
-
-
-    # ++++++++++++++++++++++++++++++++++++++++++++
-    # ============================================ Misc. Functions
-    # ++++++++++++++++++++++++++++++++++++++++++++
-    def update_document_status(self, doi=None, adding=False, popups=True, sync=True):
-        """
-        Updates the indicators about whether a certain paper is in the user's library.
-        Change color of indicator.
-
-        Parameters
-        ----------
-        doi : str
-            DOI of the paper to check for.
-        adding : bool
-            Indicates whether a paper is being added or deleted.
-        """
-        if sync:
-            self.library.sync()
-
-        if doi is None:
-            doi = self.doc_selector.value
-            if doi is None:
-                return
-
-        try:
-            doc_json = self.library.get_document(doi, return_json=True)
-        except DocNotFoundError:
-            # Document was not found in library
-            if adding:
-                if popups:
-                    _send_msg('Document not in library.')
-            self.data.doc_response_json = None
-            self.doc_selector.status = 0
-        except Exception:
-            if adding:
-                if popups:
-                    _send_msg('An error occurred during sync.\nDocument may not have been added.')
-            self.data.doc_response_json = None
-            self.doc_selector.status = 0
-        else:
-            has_file = doc_json.get('file_attached')
-            if has_file is not None:
-                # If no file is found, there may have been an error.
-                # Give users the ability to delete the document that was added without file.
-                if not has_file:
-                    msgBox = QMessageBox()
-                    msgBox.setText('Document was added without a file attached.\n'
-                                   'If this was in error, you may choose to delete\n'
-                                   'the file and add again. Otherwise, ignore this message.')
-                    delete_button = QPushButton('Delete')
-                    msgBox.addButton(delete_button, QMessageBox.RejectRole)
-                    delete_button.clicked.connect(lambda: self.move_to_trash(doi=doi))
-                    msgBox.addButton(QPushButton('Ignore'), QMessageBox.AcceptRole)
-
-                    reply = msgBox.exec_()
-
-                    # If the user chose to ignore, exit this function.
-                    if reply != QMessageBox.Accepted:
-                        # 1 = document in library without attached file
-                        self.data.doc_response_json = doc_json
-                        self.doc_selector.status = 1
-                        return
-                else:
-                    # 2 = document in library with attached file
-                    self.data.doc_response_json = doc_json
-                    self.doc_selector.status = 2
 
 
     # ++++++++++++++++++++++++++++++++++++++++++++
