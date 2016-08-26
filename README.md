@@ -7,7 +7,7 @@ Shrew provides a suite of tools allowing a greater degree of interaction with a 
 ## Setup  
 This repository is primarily a GUI wrapper for functionality found within other ScholarTools repositories. To use Shrew, follow the download instructions at [python_tools](https://github.com/ScholarTools/python_tools). It is recommended to download all repositories, but at a minimum, you will need `mendeley_python`, `reference_resolver`, `pypub`, and `pdfetch`, along with Shrew.
 
-Currently, this system is compatible only with Mendeley. Shrew works with the user and library information provided to `mendeley_python`, so to begin using it, you must enter valid Mendeley account information. 
+Currently, this system is compatible only with Mendeley. Shrew works with the user and library information provided to `mendeley_python`, so to begin using it, you must enter valid Mendeley account information. This will require signing up for a [Mendeley API account](https://mix.mendeley.com/portal#/register). Importantly, the redirect API should be: **https://localhost**.
 
 Within the `mendeley` directory in `mendeley_python`, copy the `config_template.py` file. Enter the user information into the attributes of the `DefaultUser` class, and then rename the file `user_config.py`.
 

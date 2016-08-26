@@ -183,39 +183,12 @@ class EntryWindow(QWidget):
         self.copy_shortcut = QShortcut(QKeySequence("Ctrl+C"), self)
         self.copy_shortcut.activated.connect(lambda: _copy_to_clipboard(self.textEntry.textCursor().selectedText()))
 
-        # Sizing, centering, and showing
-        # self.resize(800,700)
-        # _center(self)
-        # self.setWindowTitle('ScholarTools')
-        # self.show()
 
     # +=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+= Start of Functions
 
     # ++++++++++++++++++++++++++++++++++++++++++++
     # ============================================ Main Window Button Functions
     # ++++++++++++++++++++++++++++++++++++++++++++
-    '''
-    def resync(self):
-        self._set_response_message('Re-syncing with Mendeley...')
-        self.library.sync()
-        if self.ref_items_layout.count() > 1:
-            for x in range(1, self.ref_items_layout.count()):
-                label = self.ref_items_layout.itemAt(x).widget()
-                doi = label.doi
-                if doi is not None:
-                    doc_json = self.library.get_document(doi=doi, return_json=True)
-                    if doc_json is not None:
-                        has_file = doc_json.get('file_attached')
-                        if has_file is not None and has_file:
-                            label.setStyleSheet("background-color: rgba(0,255,0,0.25);")
-                        else:
-                            label.setStyleSheet("background-color: rgba(255,165,0,0.25);")
-                    else:
-                        label.setStyleSheet("background-color: rgba(255,0,0,0.25);")
-        self.update_indicator()
-        self.response_label.hide()
-    '''
-
     def text_changed(self):
         doc_id = self.doc_selector.value
         self.update_document_status(doi=doc_id, adding=False, sync=False, popups=False)
@@ -290,9 +263,9 @@ class EntryWindow(QWidget):
             _send_msg('Error while parsing article webpage.')
         except PDFError:
             _send_msg('PDF could not be retrieved.')
-        # except Exception as exc:
-        #     error_logging.log(method='gui.Window.add_to_library_from_main', error=str(exc), doi=doi)
-        #     _send_msg(str(exc))
+        except Exception as exc:
+            error_logging.log(method='gui.Window.add_to_library_from_main', error=str(exc), doi=doi)
+            _send_msg(str(exc))
 
         # Add entry to history
         self.doc_selector.add_to_history(doi)
@@ -978,9 +951,9 @@ class InternalSearchWindow(QWidget):
             _send_msg('Error while parsing article webpage.')
         except PDFError:
             _send_msg('PDF could not be retrieved.')
-        # except Exception as exc:
-        #     error_logging.log(method='gui.Window.add_to_library_from_main', error=str(exc), doi=doi)
-        #     _send_msg(str(exc))
+        except Exception as exc:
+            error_logging.log(method='gui.Window.add_to_library_from_main', error=str(exc), doi=doi)
+            _send_msg(str(exc))
 
         # Add entry to history
         self.doc_selector.add_to_history(doi)
@@ -1041,7 +1014,6 @@ class InternalSearchWindow(QWidget):
         self._set_response_message('Papers in your database that cite the given DOI.\n'
                                    'List may not be exhaustive.')
 
-        # self.response_label.hide()
         self.ref_area.show()
 
     def search(self):
@@ -1663,171 +1635,6 @@ class DocSelector(object):
     def add_to_history(self, entry):
         self.text_view.add_to_history(entry)
 
-'''
-class SearchSelectorView(object):
-
-    # - text entry
-    # - type selectors
-
-    def __init__(self, window):
-        self.window = window
-        self._status = 0
-
-        self.indicator = self.window.indicator
-        self.textEntry = self.window.textEntry
-        self.history = self.window.history
-
-        self.history.activated[str].connect(self.set_history_text)
-        self.history.setInsertPolicy = QComboBox.InsertAtTop
-
-    @property
-    def status(self):
-        return self._status
-
-    @status.setter
-    def status(self,value):
-        # Document is found in the library with file attached
-        if value == 2:
-            self.indicator.setStyleSheet("""QPushButton {
-                                                background-color: rgba(0,255,0,0.25); }""")
-            self._status = 2
-
-        elif value == 1:
-            self.window.indicator.setStyleSheet("""QPushButton {
-                                                background-color: rgba(255,165,0,0.25); }""")
-            self._status = 1
-        elif value == 0:
-            self.window.indicator.setStyleSheet("""QPushButton {
-                                            background-color: rgba(255, 0, 0, 0.25); }""")
-        else:
-            raise ValueError('Invalid ')
-
-    def create_text_layout(self, textEntry, indicator):
-        #   TODO: Also handle initialization of callbacks
-        indicator.setStyleSheet("""QPushButton {
-                                       background-color: rgba(0,0,0,0.25);
-                                       }""")
-        indicator.setAutoFillBackground(True)
-        indicator.setFixedSize(20,20)
-        indicator.setToolTip("Green: doc DOI in library.\n"
-                             "Yellow: doc missing file.\n"
-                             "Red: no doc with DOI found.")
-
-        textline = QHBoxLayout()
-        textline.addWidget(indicator)
-        textline.addWidget(textEntry)
-        return textline
-
-    def set_history_text(self, historical_entry):
-        self.textEntry.setText(historical_entry)
-
-    def add_to_history(self, entry):
-        num_items = self.history.count()
-
-        # Make sure the same item isn't added twice in a row
-        if self.history.itemText(0) == entry:
-            return
-
-        if num_items > 20:
-            self.history.removeItem(num_items-1)
-            # self.history.addItem(entry)
-            self.history.insertItem(0, entry)
-            self.history.setCurrentIndex(0)
-        else:
-            # self.history.addItem(entry)
-            self.history.insertItem(0, entry)
-            self.history.setCurrentIndex(0)
-
-
-class SearchSelector(object):
-
-    """
-
-    New layout:
-    -----------
-    view_callback => main_window.view_changed
-
-    #method in "window"
-    def view_changed(self):
-        type = self.doc_selector.type
-        value = self.doc_selector.value
-
-        if type == 'doi'
-            response = self.library.check_document_status(doi=value)
-
-        self.doc_selector.status = response.status
-
-        if response.status > 0
-          #Then update the references
-
-
-    self.library.sync
-    self.doc_selector.status = 0
-
-    """
-
-    def __init__(self, window):
-        self.window = window
-        self.text_view = DocSelectorView(self.window)
-
-        # Set int to keep track of if a DOI is in the library
-        # 0 --> DOI is not found in library (indicator red)
-        # 1 --> DOI is found, but there is no file (indicator orange)
-        # 2 --> DOI is found, with file attached (indicator green)
-        self._status = 0
-
-    @property
-    def value(self):
-        text = self.window.textEntry.text()
-        text = text.strip()
-        return text
-
-    # TODO: implement this
-    @property
-    def has_entry(self):
-        return False
-
-    # TODO: implement this
-    @property
-    def has_attached_file(self):
-        return False
-
-    @property
-    def status(self):
-        return self._status
-
-    @status.setter
-    def status(self, value):
-        # This method can be called by the window when:
-        # 1) Processing the current information to "load" a document
-        # 2) Upon deleting a document
-        # 3) Upon syncing
-
-        self._status = value
-
-        # Update main paper entry to reflect presence of attached file
-        if self.entry_type == 'doi':
-            if value == 0:
-                has_file = 0
-                in_lib = 0
-            elif value == 1:
-                has_file = 0
-                in_lib = 1
-            elif value == 2:
-                has_file = 1
-                in_lib = 1
-            else:
-                has_file = None
-                in_lib = None
-
-            db.update_entry_field(identifying_value=self.value, updating_field=['has_file', 'in_lib'],
-                                  updating_value=[has_file, in_lib], filter_by_doi=True)
-
-        self.text_view.status = value  # This should call a setter method that redraws accordingly
-
-    def add_to_history(self, entry):
-        self.text_view.add_to_history(entry)
-'''
 
 class FunctionModel(object):
     def __init__(self, window):
@@ -1874,9 +1681,9 @@ class FunctionModel(object):
             error_logging.log(method='gui.Window.get_refs', message='Error parsing journal page', error=str(exc), doi=doi)
             _send_msg('Error parsing journal page')
             return
-        # except Exception as exc:
-        #    error_logging.log(method='gui.Window.get_refs', error=str(exc), doi=doi)
-        #    _send_msg(str(exc))
+        except Exception as exc:
+           error_logging.log(method='gui.Window.get_refs', error=str(exc), doi=doi)
+           _send_msg(str(exc))
 
         return refs
 
