@@ -50,7 +50,6 @@ class EntryWindow(QWidget):
 
     TODOs:
      - Implement URL input capability, not just DOI
-     - Possibly make the window tabbed with expanded functionality?
      - Implement reading the abstract of any paper
 
     """
@@ -108,6 +107,10 @@ class EntryWindow(QWidget):
         self.forward_refs.clicked.connect(self.follow_refs_forward)
         self.manual_entry.clicked.connect(self.ref_entry)
 
+        # Disable the radio buttons with options that aren't supported
+        self.url_check.setDisabled(True)
+        self.fulltext_check.setDisabled(True)
+        self.pmid_check.setDisabled(True)
 
         # Make scroll items widget
         self.ref_items = QWidget()
@@ -139,6 +142,7 @@ class EntryWindow(QWidget):
         checkboxes.addWidget(self.open_notes)
         checkboxes.addStretch(1)
 
+        # Another horizontal box
         line2 = QHBoxLayout()
         line2.addWidget(self.add_to_lib)
         line2.addWidget(self.trash)
@@ -146,6 +150,11 @@ class EntryWindow(QWidget):
         line2.addWidget(self.history)
         line2.addWidget(self.manual_entry)
         line2.addStretch(1)
+
+        # Yet another horizontal box
+        bottomline = QHBoxLayout()
+        bottomline.addWidget(self.get_all_refs)
+        bottomline.addWidget(self.resolve_dois)
 
         # Create a vertical box layout.
         # Populate with widgets and add stretch space at the bottom.
@@ -162,8 +171,7 @@ class EntryWindow(QWidget):
         self.vbox.addLayout(line2)
         self.vbox.addWidget(self.response_label)
         self.vbox.addWidget(self.ref_area)
-        self.vbox.addWidget(self.get_all_refs)
-        self.vbox.addWidget(self.resolve_dois)
+        self.vbox.addLayout(bottomline)
         self.vbox.addStretch(1)
 
         self.response_label.hide()
@@ -1655,7 +1663,7 @@ class DocSelector(object):
     def add_to_history(self, entry):
         self.text_view.add_to_history(entry)
 
-
+'''
 class SearchSelectorView(object):
 
     # - text entry
@@ -1819,7 +1827,7 @@ class SearchSelector(object):
 
     def add_to_history(self, entry):
         self.text_view.add_to_history(entry)
-
+'''
 
 class FunctionModel(object):
     def __init__(self, window):
